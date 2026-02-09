@@ -1,8 +1,10 @@
 import { useStore } from "./store.js";
-import type { BrowserIncomingMessage, BrowserOutgoingMessage, ContentBlock, ChatMessage } from "./types.js";
+import type { BrowserIncomingMessage, BrowserOutgoingMessage, ContentBlock, ChatMessage, TaskItem } from "./types.js";
+import { generateUniqueSessionName } from "./utils/names.js";
 
 const sockets = new Map<string, WebSocket>();
 const reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const taskCounters = new Map<string, number>();
 
 let idCounter = 0;
 function nextId(): string {
@@ -39,6 +41,11 @@ function handleMessage(sessionId: string, event: MessageEvent) {
       store.addSession(data.session);
       store.setCliConnected(sessionId, true);
       store.setSessionStatus(sessionId, "idle");
+      if (!store.sessionNames.has(sessionId)) {
+        const existingNames = new Set(store.sessionNames.values());
+        const name = generateUniqueSessionName(existingNames);
+        store.setSessionName(sessionId, name);
+      }
       break;
     }
 
@@ -63,6 +70,35 @@ function handleMessage(sessionId: string, event: MessageEvent) {
       store.appendMessage(sessionId, chatMsg);
       store.setStreaming(sessionId, null);
       store.setSessionStatus(sessionId, "running");
+
+      // Extract TaskCreate and TaskUpdate from content blocks
+      for (const block of msg.content) {
+        if (block.type === "tool_use" && block.name === "TaskCreate") {
+          const count = (taskCounters.get(sessionId) || 0) + 1;
+          taskCounters.set(sessionId, count);
+          const input = block.input as { subject?: string; description?: string; activeForm?: string };
+          store.addTask(sessionId, {
+            id: String(count),
+            subject: input.subject || "Task",
+            description: input.description || "",
+            activeForm: input.activeForm,
+            status: "pending",
+          });
+        }
+
+        if (block.type === "tool_use" && block.name === "TaskUpdate") {
+          const input = block.input as { taskId?: string; status?: string; owner?: string; activeForm?: string; addBlockedBy?: string[] };
+          if (input.taskId) {
+            const updates: Partial<TaskItem> = {};
+            if (input.status) updates.status = input.status as TaskItem["status"];
+            if (input.owner) updates.owner = input.owner;
+            if (input.activeForm !== undefined) updates.activeForm = input.activeForm;
+            if (input.addBlockedBy) updates.blockedBy = input.addBlockedBy;
+            store.updateTask(sessionId, input.taskId, updates);
+          }
+        }
+      }
+
       break;
     }
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useStore } from "../store.js";
 import { api } from "../api.js";
 import { connectSession, disconnectSession } from "../ws.js";
@@ -6,6 +6,9 @@ import { NewSessionDialog } from "./NewSessionDialog.js";
 
 export function Sidebar() {
   const [showNew, setShowNew] = useState(false);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState("");
+  const editInputRef = useRef<HTMLInputElement>(null);
   const sessions = useStore((s) => s.sessions);
   const sdkSessions = useStore((s) => s.sdkSessions);
   const currentSessionId = useStore((s) => s.currentSessionId);
@@ -15,6 +18,7 @@ export function Sidebar() {
   const cliConnected = useStore((s) => s.cliConnected);
   const sessionStatus = useStore((s) => s.sessionStatus);
   const removeSession = useStore((s) => s.removeSession);
+  const sessionNames = useStore((s) => s.sessionNames);
 
   // Poll for SDK sessions on mount
   useEffect(() => {
@@ -58,6 +62,27 @@ export function Sidebar() {
     }
     setCurrentSession(sessionId);
     connectSession(sessionId);
+  }
+
+  // Focus edit input when entering edit mode
+  useEffect(() => {
+    if (editingSessionId && editInputRef.current) {
+      editInputRef.current.focus();
+      editInputRef.current.select();
+    }
+  }, [editingSessionId]);
+
+  function confirmRename() {
+    if (editingSessionId && editingName.trim()) {
+      useStore.getState().setSessionName(editingSessionId, editingName.trim());
+    }
+    setEditingSessionId(null);
+    setEditingName("");
+  }
+
+  function cancelRename() {
+    setEditingSessionId(null);
+    setEditingName("");
   }
 
   const handleDeleteSession = useCallback(async (e: React.MouseEvent, sessionId: string) => {
@@ -124,16 +149,23 @@ export function Sidebar() {
           <div className="space-y-0.5">
             {sessionList.map((s) => {
               const isActive = currentSessionId === s.id;
+              const name = sessionNames.get(s.id);
               const shortId = s.id.slice(0, 8);
-              const label = s.model || shortId;
+              const label = name || s.model || shortId;
               const dirName = s.cwd ? s.cwd.split("/").pop() : "";
               const isRunning = s.status === "running";
               const isCompacting = s.status === "compacting";
+              const isEditing = editingSessionId === s.id;
 
               return (
                 <div key={s.id} className="relative group">
                   <button
                     onClick={() => handleSelectSession(s.id)}
+                    onDoubleClick={(e) => {
+                      e.preventDefault();
+                      setEditingSessionId(s.id);
+                      setEditingName(label);
+                    }}
                     className={`w-full px-3 py-2.5 pr-8 text-left rounded-[10px] transition-all duration-100 cursor-pointer ${
                       isActive
                         ? "bg-cc-active"
@@ -159,9 +191,31 @@ export function Sidebar() {
                           <span className="absolute inset-0 w-2 h-2 rounded-full bg-cc-success/40 animate-[pulse-dot_1.5s_ease-in-out_infinite]" />
                         )}
                       </span>
-                      <span className="text-[13px] font-medium truncate flex-1 text-cc-fg">
-                        {label}
-                      </span>
+                      {isEditing ? (
+                        <input
+                          ref={editInputRef}
+                          value={editingName}
+                          onChange={(e) => setEditingName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              confirmRename();
+                            } else if (e.key === "Escape") {
+                              e.preventDefault();
+                              cancelRename();
+                            }
+                            e.stopPropagation();
+                          }}
+                          onBlur={confirmRename}
+                          onClick={(e) => e.stopPropagation()}
+                          onDoubleClick={(e) => e.stopPropagation()}
+                          className="text-[13px] font-medium flex-1 text-cc-fg bg-transparent border border-cc-border rounded-md px-1 py-0 outline-none focus:border-cc-primary/50 min-w-0"
+                        />
+                      ) : (
+                        <span className="text-[13px] font-medium truncate flex-1 text-cc-fg">
+                          {label}
+                        </span>
+                      )}
                     </div>
                     {dirName && (
                       <p className="text-[11px] text-cc-muted truncate mt-0.5 ml-4">

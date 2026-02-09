@@ -251,10 +251,27 @@ export function Composer({ sessionId }: { sessionId: string }) {
           )}
         </div>
 
-        <div className="mt-1.5 px-1">
+        <div className="mt-1.5 px-1 flex items-center justify-between">
           <span className="text-[10px] text-cc-muted">
             Enter to send, Shift+Tab to toggle mode
           </span>
+          {session && session.context_used_percent > 0 && (
+            <div className="flex items-center gap-1.5">
+              <div className="w-12 h-1 rounded-full bg-cc-hover overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all ${
+                    session.context_used_percent > 80
+                      ? "bg-cc-error"
+                      : session.context_used_percent > 50
+                      ? "bg-cc-warning"
+                      : "bg-cc-primary"
+                  }`}
+                  style={{ width: `${Math.min(session.context_used_percent, 100)}%` }}
+                />
+              </div>
+              <span className="text-[10px] text-cc-muted tabular-nums">{session.context_used_percent}%</span>
+            </div>
+          )}
         </div>
       </div>
     </div>

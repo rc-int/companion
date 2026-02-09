@@ -3,6 +3,7 @@ import { useStore } from "../store.js";
 import { api, type DirEntry } from "../api.js";
 import { connectSession, waitForConnection, sendToSession } from "../ws.js";
 import { disconnectSession } from "../ws.js";
+import { generateUniqueSessionName } from "../utils/names.js";
 
 interface ImageAttachment {
   name: string;
@@ -204,6 +205,11 @@ export function HomePage() {
         cwd: cwd || undefined,
       });
       const sessionId = result.sessionId;
+
+      // Assign a random session name
+      const existingNames = new Set(useStore.getState().sessionNames.values());
+      const sessionName = generateUniqueSessionName(existingNames);
+      useStore.getState().setSessionName(sessionId, sessionName);
 
       // Save cwd to recent dirs
       if (cwd) addRecentDir(cwd);

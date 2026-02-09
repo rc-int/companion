@@ -4,11 +4,13 @@ import { Sidebar } from "./components/Sidebar.js";
 import { ChatView } from "./components/ChatView.js";
 import { TopBar } from "./components/TopBar.js";
 import { HomePage } from "./components/HomePage.js";
+import { TaskPanel } from "./components/TaskPanel.js";
 
 export default function App() {
   const darkMode = useStore((s) => s.darkMode);
   const currentSessionId = useStore((s) => s.currentSessionId);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
+  const taskPanelOpen = useStore((s) => s.taskPanelOpen);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", darkMode);
@@ -47,6 +49,30 @@ export default function App() {
           )}
         </div>
       </div>
+
+      {/* Task panel — overlay on mobile, inline on desktop */}
+      {currentSessionId && (
+        <>
+          {/* Mobile overlay backdrop */}
+          {taskPanelOpen && (
+            <div
+              className="fixed inset-0 bg-black/30 z-30 lg:hidden"
+              onClick={() => useStore.getState().setTaskPanelOpen(false)}
+            />
+          )}
+
+          <div
+            className={`
+              fixed lg:relative z-40 lg:z-auto right-0 top-0
+              h-full shrink-0 transition-all duration-200
+              ${taskPanelOpen ? "w-[280px] translate-x-0" : "w-0 translate-x-full lg:translate-x-0"}
+              overflow-hidden
+            `}
+          >
+            <TaskPanel sessionId={currentSessionId} />
+          </div>
+        </>
+      )}
     </div>
   );
 }

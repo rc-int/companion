@@ -20,6 +20,16 @@ export interface ChatMessage {
   stopReason?: string | null;
 }
 
+export interface TaskItem {
+  id: string;
+  subject: string;
+  description: string;
+  activeForm?: string;
+  status: "pending" | "in_progress" | "completed";
+  owner?: string;
+  blockedBy?: string[];
+}
+
 export interface SdkSessionInfo {
   sessionId: string;
   pid?: number;

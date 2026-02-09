@@ -16,6 +16,8 @@ export function TopBar() {
   const sidebarOpen = useStore((s) => s.sidebarOpen);
   const setSidebarOpen = useStore((s) => s.setSidebarOpen);
   const previousPermissionMode = useStore((s) => s.previousPermissionMode);
+  const taskPanelOpen = useStore((s) => s.taskPanelOpen);
+  const setTaskPanelOpen = useStore((s) => s.setTaskPanelOpen);
 
   const session = currentSessionId ? sessions.get(currentSessionId) : null;
   const isConnected = currentSessionId ? (cliConnected.get(currentSessionId) ?? false) : false;
@@ -113,6 +115,21 @@ export function TopBar() {
               </div>
             </>
           )}
+
+          <span className="text-cc-border">|</span>
+          <button
+            onClick={() => setTaskPanelOpen(!taskPanelOpen)}
+            className={`flex items-center justify-center w-7 h-7 rounded-lg transition-colors cursor-pointer ${
+              taskPanelOpen
+                ? "text-cc-primary bg-cc-active"
+                : "text-cc-muted hover:text-cc-fg hover:bg-cc-hover"
+            }`}
+            title="Toggle task panel"
+          >
+            <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+              <path fillRule="evenodd" d="M6 2a2 2 0 00-2 2v12a2 2 0 002 2h8a2 2 0 002-2V4a2 2 0 00-2-2H6zm1 3a1 1 0 000 2h6a1 1 0 100-2H7zm0 4a1 1 0 000 2h6a1 1 0 100-2H7zm0 4a1 1 0 000 2h4a1 1 0 100-2H7z" clipRule="evenodd" />
+            </svg>
+          </button>
         </div>
       )}
     </header>

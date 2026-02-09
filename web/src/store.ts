@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { SessionState, PermissionRequest, ChatMessage, SdkSessionInfo } from "./types.js";
+import type { SessionState, PermissionRequest, ChatMessage, SdkSessionInfo, TaskItem } from "./types.js";
 
 interface AppState {
   // Sessions
@@ -26,14 +26,22 @@ interface AppState {
   // Plan mode: stores previous permission mode per session so we can restore it
   previousPermissionMode: Map<string, string>;
 
+  // Tasks per session
+  sessionTasks: Map<string, TaskItem[]>;
+
+  // Session display names
+  sessionNames: Map<string, string>;
+
   // UI
   darkMode: boolean;
   sidebarOpen: boolean;
+  taskPanelOpen: boolean;
 
   // Actions
   setDarkMode: (v: boolean) => void;
   toggleDarkMode: () => void;
   setSidebarOpen: (v: boolean) => void;
+  setTaskPanelOpen: (open: boolean) => void;
 
   // Session actions
   setCurrentSession: (id: string | null) => void;
@@ -52,6 +60,13 @@ interface AppState {
   addPermission: (perm: PermissionRequest) => void;
   removePermission: (requestId: string) => void;
 
+  // Task actions
+  addTask: (sessionId: string, task: TaskItem) => void;
+  updateTask: (sessionId: string, taskId: string, updates: Partial<TaskItem>) => void;
+
+  // Session name actions
+  setSessionName: (sessionId: string, name: string) => void;
+
   // Plan mode actions
   setPreviousPermissionMode: (sessionId: string, mode: string) => void;
 
@@ -61,6 +76,15 @@ interface AppState {
   setSessionStatus: (sessionId: string, status: "idle" | "running" | "compacting" | null) => void;
 
   reset: () => void;
+}
+
+function getInitialSessionNames(): Map<string, string> {
+  if (typeof window === "undefined") return new Map();
+  try {
+    return new Map(JSON.parse(localStorage.getItem("cc-session-names") || "[]"));
+  } catch {
+    return new Map();
+  }
 }
 
 function getInitialDarkMode(): boolean {
@@ -81,8 +105,11 @@ export const useStore = create<AppState>((set) => ({
   cliConnected: new Map(),
   sessionStatus: new Map(),
   previousPermissionMode: new Map(),
+  sessionTasks: new Map(),
+  sessionNames: getInitialSessionNames(),
   darkMode: getInitialDarkMode(),
   sidebarOpen: typeof window !== "undefined" ? window.innerWidth >= 768 : true,
+  taskPanelOpen: typeof window !== "undefined" ? window.innerWidth >= 1024 : false,
 
   setDarkMode: (v) => {
     localStorage.setItem("cc-dark-mode", String(v));
@@ -95,6 +122,7 @@ export const useStore = create<AppState>((set) => ({
       return { darkMode: next };
     }),
   setSidebarOpen: (v) => set({ sidebarOpen: v }),
+  setTaskPanelOpen: (open) => set({ taskPanelOpen: open }),
 
   setCurrentSession: (id) => set({ currentSessionId: id }),
 
@@ -131,6 +159,11 @@ export const useStore = create<AppState>((set) => ({
       sessionStatus.delete(sessionId);
       const previousPermissionMode = new Map(s.previousPermissionMode);
       previousPermissionMode.delete(sessionId);
+      const sessionTasks = new Map(s.sessionTasks);
+      sessionTasks.delete(sessionId);
+      const sessionNames = new Map(s.sessionNames);
+      sessionNames.delete(sessionId);
+      localStorage.setItem("cc-session-names", JSON.stringify(Array.from(sessionNames.entries())));
       return {
         sessions,
         messages,
@@ -139,6 +172,8 @@ export const useStore = create<AppState>((set) => ({
         cliConnected,
         sessionStatus,
         previousPermissionMode,
+        sessionTasks,
+        sessionNames,
         sdkSessions: s.sdkSessions.filter((sdk) => sdk.sessionId !== sessionId),
         currentSessionId: s.currentSessionId === sessionId ? null : s.currentSessionId,
       };
@@ -200,6 +235,35 @@ export const useStore = create<AppState>((set) => ({
       return { pendingPermissions };
     }),
 
+  addTask: (sessionId, task) =>
+    set((s) => {
+      const sessionTasks = new Map(s.sessionTasks);
+      const tasks = [...(sessionTasks.get(sessionId) || []), task];
+      sessionTasks.set(sessionId, tasks);
+      return { sessionTasks };
+    }),
+
+  updateTask: (sessionId, taskId, updates) =>
+    set((s) => {
+      const sessionTasks = new Map(s.sessionTasks);
+      const tasks = sessionTasks.get(sessionId);
+      if (tasks) {
+        sessionTasks.set(
+          sessionId,
+          tasks.map((t) => (t.id === taskId ? { ...t, ...updates } : t)),
+        );
+      }
+      return { sessionTasks };
+    }),
+
+  setSessionName: (sessionId, name) =>
+    set((s) => {
+      const sessionNames = new Map(s.sessionNames);
+      sessionNames.set(sessionId, name);
+      localStorage.setItem("cc-session-names", JSON.stringify(Array.from(sessionNames.entries())));
+      return { sessionNames };
+    }),
+
   setPreviousPermissionMode: (sessionId, mode) =>
     set((s) => {
       const previousPermissionMode = new Map(s.previousPermissionMode);
@@ -240,5 +304,7 @@ export const useStore = create<AppState>((set) => ({
       cliConnected: new Map(),
       sessionStatus: new Map(),
       previousPermissionMode: new Map(),
+      sessionTasks: new Map(),
+      sessionNames: new Map(),
     }),
 }));
