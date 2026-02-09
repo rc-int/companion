@@ -4,23 +4,19 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { serveStatic } from "hono/bun";
 import { createRoutes } from "./routes.js";
-import { ControllerBridge } from "./controller-bridge.js";
 import { CliLauncher } from "./cli-launcher.js";
 import { WsBridge } from "./ws-bridge.js";
 import type { SocketData } from "./ws-bridge.js";
 import type { ServerWebSocket } from "bun";
 
-type WsData = SocketData | { kind: "legacy" };
-
 const port = Number(process.env.PORT) || 3456;
-const bridge = new ControllerBridge();
 const wsBridge = new WsBridge();
-const launcher = new CliLauncher(bridge.ws, port);
+const launcher = new CliLauncher(port);
 
 const app = new Hono();
 
 app.use("/api/*", cors());
-app.route("/api", createRoutes(bridge, launcher, wsBridge));
+app.route("/api", createRoutes(launcher, wsBridge));
 
 // In production, serve built frontend
 if (process.env.NODE_ENV === "production") {
@@ -28,7 +24,7 @@ if (process.env.NODE_ENV === "production") {
   app.get("/*", serveStatic({ path: "./dist/index.html" }));
 }
 
-const server = Bun.serve<WsData>({
+const server = Bun.serve<SocketData>({
   port,
   fetch(req, server) {
     const url = new URL(req.url);
@@ -55,56 +51,33 @@ const server = Bun.serve<WsData>({
       return new Response("WebSocket upgrade failed", { status: 400 });
     }
 
-    // ── Legacy WebSocket — existing controller-bridge UI clients ───────
-    if (url.pathname === "/ws") {
-      const upgraded = server.upgrade(req, {
-        data: { kind: "legacy" as const },
-      });
-      if (upgraded) return undefined;
-      return new Response("WebSocket upgrade failed", { status: 400 });
-    }
-
     // Hono handles the rest
     return app.fetch(req, server);
   },
   websocket: {
-    open(ws: ServerWebSocket<WsData>) {
+    open(ws: ServerWebSocket<SocketData>) {
       const data = ws.data;
       if (data.kind === "cli") {
-        wsBridge.handleCLIOpen(ws as ServerWebSocket<SocketData>, data.sessionId);
-        // Also notify the launcher that the CLI connected
+        wsBridge.handleCLIOpen(ws, data.sessionId);
         launcher.markConnected(data.sessionId);
       } else if (data.kind === "browser") {
-        wsBridge.handleBrowserOpen(ws as ServerWebSocket<SocketData>, data.sessionId);
-      } else {
-        // Legacy /ws path — existing controller-bridge
-        bridge.ws.add(ws as ServerWebSocket<unknown>);
-        bridge.ws.sendTo(ws as ServerWebSocket<unknown>, {
-          type: "snapshot",
-          session: bridge.sessionInfo,
-          agents: bridge.getAgents(),
-          messages: bridge.getMessages(),
-          pendingApprovals: bridge.getPendingApprovals(),
-        });
+        wsBridge.handleBrowserOpen(ws, data.sessionId);
       }
     },
-    message(ws: ServerWebSocket<WsData>, msg: string | Buffer) {
+    message(ws: ServerWebSocket<SocketData>, msg: string | Buffer) {
       const data = ws.data;
       if (data.kind === "cli") {
-        wsBridge.handleCLIMessage(ws as ServerWebSocket<SocketData>, msg);
+        wsBridge.handleCLIMessage(ws, msg);
       } else if (data.kind === "browser") {
-        wsBridge.handleBrowserMessage(ws as ServerWebSocket<SocketData>, msg);
+        wsBridge.handleBrowserMessage(ws, msg);
       }
-      // Legacy /ws: no messages expected from client
     },
-    close(ws: ServerWebSocket<WsData>) {
+    close(ws: ServerWebSocket<SocketData>) {
       const data = ws.data;
       if (data.kind === "cli") {
-        wsBridge.handleCLIClose(ws as ServerWebSocket<SocketData>);
+        wsBridge.handleCLIClose(ws);
       } else if (data.kind === "browser") {
-        wsBridge.handleBrowserClose(ws as ServerWebSocket<SocketData>);
-      } else {
-        bridge.ws.remove(ws as ServerWebSocket<unknown>);
+        wsBridge.handleBrowserClose(ws);
       }
     },
   },
@@ -113,7 +86,6 @@ const server = Bun.serve<WsData>({
 console.log(`Server running on http://localhost:${server.port}`);
 console.log(`  CLI WebSocket:     ws://localhost:${server.port}/ws/cli/:sessionId`);
 console.log(`  Browser WebSocket: ws://localhost:${server.port}/ws/browser/:sessionId`);
-console.log(`  Legacy WebSocket:  ws://localhost:${server.port}/ws`);
 
 // In dev mode, log that Vite should be run separately
 if (process.env.NODE_ENV !== "production") {

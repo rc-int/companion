@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { execSync } from "node:child_process";
 import type { Subprocess } from "bun";
-import type { WsManager } from "./ws-manager.js";
 
 export interface SdkSessionInfo {
   sessionId: string;
@@ -30,11 +29,9 @@ export interface LaunchOptions {
 export class CliLauncher {
   private sessions = new Map<string, SdkSessionInfo>();
   private processes = new Map<string, Subprocess>();
-  private ws: WsManager;
   private port: number;
 
-  constructor(ws: WsManager, port: number) {
-    this.ws = ws;
+  constructor(port: number) {
     this.port = port;
   }
 
@@ -121,11 +118,6 @@ export class CliLauncher {
         session.exitCode = exitCode;
       }
       this.processes.delete(sessionId);
-      this.ws.broadcast({
-        type: "sdk:session:exited",
-        sessionId,
-        exitCode,
-      } as any);
     });
 
     return info;
