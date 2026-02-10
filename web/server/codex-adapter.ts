@@ -268,6 +268,9 @@ export class CodexAdapter {
   // Track message counter for synthesized IDs
   private msgCounter = 0;
 
+  // Accumulate reasoning text by item ID so we can emit final thinking blocks.
+  private reasoningTextByItemId = new Map<string, string>();
+
   // Track which item IDs we have already emitted a tool_use block for.
   // When Codex auto-approves (approvalPolicy "never"), it may skip item/started
   // and only send item/completed — we need to emit tool_use before tool_result.
@@ -570,7 +573,7 @@ export class CodexAdapter {
       case "item/reasoning/textDelta":
       case "item/reasoning/summaryTextDelta":
       case "item/reasoning/summaryPartAdded":
-        // Streaming reasoning tokens. Could emit as thinking content_block_delta.
+        this.handleReasoningDelta(params);
         break;
       case "item/mcpToolCall/progress":
         // MCP tool call progress — could map to tool_progress.
@@ -787,6 +790,7 @@ export class CodexAdapter {
 
       case "reasoning": {
         const r = item as CodexReasoningItem;
+        this.reasoningTextByItemId.set(item.id, r.summary || r.content || "");
         // Emit as thinking content block
         if (r.summary || r.content) {
           this.emit({
@@ -807,9 +811,26 @@ export class CodexAdapter {
         break;
 
       default:
-        // userMessage, plan, enteredReviewMode, etc. — log for debugging
-        console.log(`[codex-adapter] Unhandled item/started type: ${item.type}`, JSON.stringify(item).substring(0, 300));
+        // userMessage is an echo of browser input and not needed in UI.
+        if (item.type !== "userMessage") {
+          console.log(`[codex-adapter] Unhandled item/started type: ${item.type}`, JSON.stringify(item).substring(0, 300));
+        }
         break;
+    }
+  }
+
+  private handleReasoningDelta(params: Record<string, unknown>): void {
+    const itemId = params.itemId as string | undefined;
+    if (!itemId) return;
+
+    if (!this.reasoningTextByItemId.has(itemId)) {
+      this.reasoningTextByItemId.set(itemId, "");
+    }
+
+    const delta = params.delta as string | undefined;
+    if (delta) {
+      const current = this.reasoningTextByItemId.get(itemId) || "";
+      this.reasoningTextByItemId.set(itemId, current + delta);
     }
   }
 
@@ -893,9 +914,23 @@ export class CodexAdapter {
         // Emit tool result
         const output = (item as Record<string, unknown>).stdout as string || "";
         const stderr = (item as Record<string, unknown>).stderr as string || "";
-        const resultText = stderr ? `${output}\n${stderr}` : output;
+        const combinedOutput = [output, stderr].filter(Boolean).join("\n").trim();
+        const exitCode = typeof cmd.exitCode === "number" ? cmd.exitCode : 0;
+        const failed = cmd.status === "failed" || cmd.status === "declined" || exitCode !== 0;
 
-        this.emitToolResult(item.id, resultText || `Exit code: ${cmd.exitCode ?? 0}`, cmd.status === "failed");
+        // Avoid noisy placeholder output for successful commands with no stdout/stderr.
+        if (!combinedOutput && !failed) {
+          break;
+        }
+
+        let resultText = combinedOutput;
+        if (!resultText) {
+          resultText = `Exit code: ${exitCode}`;
+        } else if (exitCode !== 0) {
+          resultText = `${resultText}\nExit code: ${exitCode}`;
+        }
+
+        this.emitToolResult(item.id, resultText, failed);
         break;
       }
 
@@ -931,6 +966,32 @@ export class CodexAdapter {
       }
 
       case "reasoning": {
+        const r = item as CodexReasoningItem;
+        const thinkingText = (
+          this.reasoningTextByItemId.get(item.id)
+          || r.summary
+          || r.content
+          || ""
+        ).trim();
+
+        if (thinkingText) {
+          this.emit({
+            type: "assistant",
+            message: {
+              id: `codex-msg-${++this.msgCounter}`,
+              type: "message",
+              role: "assistant",
+              model: this.options.model || "",
+              content: [{ type: "thinking", thinking: thinkingText }],
+              stop_reason: null,
+              usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+            },
+            parent_tool_use_id: null,
+          });
+        }
+
+        this.reasoningTextByItemId.delete(item.id);
+
         // Close the thinking content block that was opened in handleItemStarted
         this.emit({
           type: "stream_event",
@@ -948,7 +1009,9 @@ export class CodexAdapter {
         break;
 
       default:
-        console.log(`[codex-adapter] Unhandled item/completed type: ${item.type}`, JSON.stringify(item).substring(0, 300));
+        if (item.type !== "userMessage") {
+          console.log(`[codex-adapter] Unhandled item/completed type: ${item.type}`, JSON.stringify(item).substring(0, 300));
+        }
         break;
     }
   }
@@ -992,7 +1055,8 @@ export class CodexAdapter {
 
     if (total && contextWindow && contextWindow > 0) {
       const used = (total.inputTokens || 0) + (total.outputTokens || 0);
-      updates.context_used_percent = Math.round((used / contextWindow) * 100);
+      const pct = Math.round((used / contextWindow) * 100);
+      updates.context_used_percent = Math.max(0, Math.min(pct, 100));
     }
 
     // Codex doesn't seem to provide cost data directly in tokenUsage

@@ -212,6 +212,19 @@ describe("POST /api/sessions/create", () => {
     const json = await res.json();
     expect(json).toEqual({ error: "CLI binary not found" });
   });
+
+  it("returns 400 for invalid backend values", async () => {
+    const res = await app.request("/api/sessions/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd: "/test", backend: "invalid-backend" }),
+    });
+
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error).toContain("Invalid backend");
+    expect(launcher.launch).not.toHaveBeenCalled();
+  });
 });
 
 describe("GET /api/sessions", () => {

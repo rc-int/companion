@@ -50,9 +50,10 @@ interface Session {
   pendingMessages: string[];
 }
 
-function makeDefaultState(sessionId: string): SessionState {
+function makeDefaultState(sessionId: string, backendType: BackendType = "claude"): SessionState {
   return {
     session_id: sessionId,
+    backend_type: backendType,
     model: "",
     cwd: "",
     tools: [],
@@ -124,6 +125,7 @@ export class WsBridge {
         messageHistory: p.messageHistory || [],
         pendingMessages: p.pendingMessages || [],
       };
+      session.state.backend_type = session.backendType;
       this.sessions.set(p.id, session);
       // Restored sessions with completed turns don't need auto-naming re-triggered
       if (session.state.num_turns > 0) {
@@ -160,13 +162,15 @@ export class WsBridge {
         cliSocket: null,
         codexAdapter: null,
         browserSockets: new Set(),
-        state: makeDefaultState(sessionId),
+        state: makeDefaultState(sessionId, backendType),
         pendingPermissions: new Map(),
         messageHistory: [],
         pendingMessages: [],
       };
       this.sessions.set(sessionId, session);
     }
+    session.backendType = backendType;
+    session.state.backend_type = backendType;
     return session;
   }
 
@@ -233,10 +237,22 @@ export class WsBridge {
   attachCodexAdapter(sessionId: string, adapter: CodexAdapter): void {
     const session = this.getOrCreateSession(sessionId, "codex");
     session.backendType = "codex";
+    session.state.backend_type = "codex";
     session.codexAdapter = adapter;
 
     // Forward translated messages to browsers
     adapter.onBrowserMessage((msg) => {
+      if (msg.type === "session_init") {
+        session.state = { ...session.state, ...msg.session, backend_type: "codex" };
+        this.persistSession(session);
+      } else if (msg.type === "session_update") {
+        session.state = { ...session.state, ...msg.session, backend_type: "codex" };
+        this.persistSession(session);
+      } else if (msg.type === "status_change") {
+        session.state.is_compacting = msg.status === "compacting";
+        this.persistSession(session);
+      }
+
       // Store assistant/result messages in history for replay
       if (msg.type === "assistant" || msg.type === "result") {
         session.messageHistory.push(msg);
@@ -282,11 +298,18 @@ export class WsBridge {
       }
       if (meta.model) session.state.model = meta.model;
       if (meta.cwd) session.state.cwd = meta.cwd;
+      session.state.backend_type = "codex";
+      this.persistSession(session);
     });
 
     // Handle disconnect
     adapter.onDisconnect(() => {
+      for (const [reqId] of session.pendingPermissions) {
+        this.broadcastToBrowsers(session, { type: "permission_cancelled", request_id: reqId });
+      }
+      session.pendingPermissions.clear();
       session.codexAdapter = null;
+      this.persistSession(session);
       console.log(`[ws-bridge] Codex adapter disconnected for session ${sessionId}`);
       this.broadcastToBrowsers(session, { type: "cli_disconnected" });
     });
@@ -588,9 +611,10 @@ export class WsBridge {
     if (msg.modelUsage) {
       for (const usage of Object.values(msg.modelUsage)) {
         if (usage.contextWindow > 0) {
-          session.state.context_used_percent = Math.round(
+          const pct = Math.round(
             ((usage.inputTokens + usage.outputTokens) / usage.contextWindow) * 100
           );
+          session.state.context_used_percent = Math.max(0, Math.min(pct, 100));
         }
       }
     }
@@ -689,6 +713,10 @@ export class WsBridge {
           content: msg.content,
           timestamp: Date.now(),
         });
+        this.persistSession(session);
+      }
+      if (msg.type === "permission_response") {
+        session.pendingPermissions.delete(msg.request_id);
         this.persistSession(session);
       }
 

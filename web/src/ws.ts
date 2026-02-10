@@ -215,9 +215,10 @@ function handleMessage(sessionId: string, event: MessageEvent) {
       if (r.modelUsage) {
         for (const usage of Object.values(r.modelUsage)) {
           if (usage.contextWindow > 0) {
-            sessionUpdates.context_used_percent = Math.round(
+            const pct = Math.round(
               ((usage.inputTokens + usage.outputTokens) / usage.contextWindow) * 100
             );
+            sessionUpdates.context_used_percent = Math.max(0, Math.min(pct, 100));
           }
         }
       }

@@ -20,6 +20,11 @@ export function createRoutes(launcher: CliLauncher, wsBridge: WsBridge, sessionS
   api.post("/sessions/create", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     try {
+      const backend = body.backend ?? "claude";
+      if (backend !== "claude" && backend !== "codex") {
+        return c.json({ error: `Invalid backend: ${String(backend)}` }, 400);
+      }
+
       // Resolve environment variables from envSlug
       let envVars: Record<string, string> | undefined = body.env;
       if (body.envSlug) {
@@ -69,7 +74,7 @@ export function createRoutes(launcher: CliLauncher, wsBridge: WsBridge, sessionS
         codexBinary: body.codexBinary,
         allowedTools: body.allowedTools,
         env: envVars,
-        backendType: body.backend || "claude",
+        backendType: backend,
         worktreeInfo,
       });
 

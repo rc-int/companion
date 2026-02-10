@@ -202,6 +202,8 @@ export function Sidebar() {
 
   const activeSessions = allSessionList.filter((s) => !s.archived);
   const archivedSessions = allSessionList.filter((s) => s.archived);
+  const currentSession = currentSessionId ? allSessionList.find((s) => s.id === currentSessionId) : null;
+  const logoSrc = currentSession?.backendType === "codex" ? "/logo-codex.svg" : "/logo.svg";
 
   function renderSessionItem(s: typeof allSessionList[number], options?: { isArchived?: boolean }) {
     const isActive = currentSessionId === s.id;
@@ -375,7 +377,7 @@ export function Sidebar() {
       {/* Header */}
       <div className="p-4 pb-3">
         <div className="flex items-center gap-2 mb-4">
-          <img src="/logo.svg" alt="" className="w-7 h-7" />
+          <img src={logoSrc} alt="" className="w-7 h-7" />
           <span className="text-sm font-semibold text-cc-fg tracking-tight">The Vibe Companion</span>
         </div>
 
