@@ -362,7 +362,13 @@ function handleMessage(sessionId: string, event: MessageEvent) {
         }
       }
       if (chatMessages.length > 0) {
-        store.setMessages(sessionId, chatMessages);
+        const existing = store.messages.get(sessionId) || [];
+        // Only replace if history has at least as many messages as current state,
+        // or if the current state is empty (initial connect). This prevents a race
+        // condition where live messages (e.g., tool_use) are lost by a stale history replay.
+        if (existing.length === 0 || chatMessages.length >= existing.length) {
+          store.setMessages(sessionId, chatMessages);
+        }
       }
       break;
     }
