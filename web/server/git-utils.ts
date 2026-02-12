@@ -437,7 +437,7 @@ export function getCommitLog(
 ): { hash: string; subject: string }[] {
   try {
     const raw = git(
-      `log --format="%h %s" origin/${baseBranch}..HEAD --max-count=${maxCount}`,
+      `log --format="%h %s" ${JSON.stringify(`origin/${baseBranch}..HEAD`)} --max-count=${maxCount}`,
       cwd,
     );
     if (!raw) return [];
