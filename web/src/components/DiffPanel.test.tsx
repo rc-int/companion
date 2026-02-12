@@ -90,9 +90,9 @@ describe("DiffPanel", () => {
       expect(mockApi.getFileDiff).toHaveBeenCalledWith("/repo/src/app.ts");
     });
 
-    // DiffViewer should render the diff content
+    // DiffViewer should render the diff content (may appear in top bar + DiffViewer header)
     await waitFor(() => {
-      expect(screen.getByText("src/app.ts")).toBeInTheDocument();
+      expect(screen.getAllByText("app.ts").length).toBeGreaterThanOrEqual(1);
     });
   });
 
