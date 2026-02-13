@@ -1,17 +1,15 @@
 import { Hono } from "hono";
 import { execSync } from "node:child_process";
-import { resolveBinary } from "./path-resolver.js";
 import { readdir, readFile, writeFile, stat } from "node:fs/promises";
 import { resolve, join, dirname } from "node:path";
 import { homedir } from "node:os";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import type { CliLauncher } from "./cli-launcher.js";
 import type { WsBridge } from "./ws-bridge.js";
 import type { SessionStore } from "./session-store.js";
 import type { WorktreeTracker } from "./worktree-tracker.js";
 import type { TerminalManager } from "./terminal-manager.js";
 import * as envManager from "./env-manager.js";
-import * as cronStore from "./cron-store.js";
 import * as gitUtils from "./git-utils.js";
 import * as sessionNames from "./session-names.js";
 import { containerManager, type ContainerConfig, type ContainerInfo } from "./container-manager.js";
@@ -23,10 +21,6 @@ import {
   isUpdateAvailable,
   setUpdateInProgress,
 } from "./update-checker.js";
-import { refreshServiceDefinition } from "./service.js";
-import type { AssistantManager } from "./assistant-manager.js";
-
-const UPDATE_CHECK_STALE_MS = 5 * 60 * 1000;
 
 function execCaptureStdout(
   command: string,
@@ -44,32 +38,6 @@ function execCaptureStdout(
   }
 }
 
-function resolveBranchDiffBases(
-  repoRoot: string,
-): string[] {
-  const options = { cwd: repoRoot, encoding: "utf-8", timeout: 5000 } as const;
-
-  try {
-    const originHead = execSync("git symbolic-ref refs/remotes/origin/HEAD", options).trim();
-    const match = originHead.match(/^refs\/remotes\/origin\/(.+)$/);
-    if (match?.[1]) {
-      return [`origin/${match[1]}`, match[1]];
-    }
-  } catch {
-    // No remote HEAD ref available, fallback to common local defaults.
-  }
-
-  try {
-    const branches = execSync("git branch --list main master", options).trim();
-    if (branches.includes("main")) return ["main"];
-    if (branches.includes("master")) return ["master"];
-  } catch {
-    // Ignore and use a conservative fallback below.
-  }
-
-  return ["main"];
-}
-
 export function createRoutes(
   launcher: CliLauncher,
   wsBridge: WsBridge,
@@ -77,9 +45,7 @@ export function createRoutes(
   worktreeTracker: WorktreeTracker,
   terminalManager: TerminalManager,
   prPoller?: import("./pr-poller.js").PRPoller,
-  recorder?: import("./recorder.js").RecorderManager,
-  cronScheduler?: import("./cron-scheduler.js").CronScheduler,
-  assistantManager?: AssistantManager,
+  recorder?: import("./recorder.js").Recorder,
 ) {
   const api = new Hono();
 
@@ -158,8 +124,7 @@ export function createRoutes(
 
           const pullResult = gitUtils.gitPull(repoInfo.repoRoot);
           if (!pullResult.success) {
-            // Don't fail session creation if pull fails (e.g. no upstream tracking)
-            console.warn(`[routes] git pull warning (non-fatal): ${pullResult.output}`);
+            throw new Error(`git pull failed before session create: ${pullResult.output}`);
           }
         }
       }
@@ -194,6 +159,7 @@ export function createRoutes(
         env: envVars,
         backendType: backend,
         worktreeInfo,
+        resumeSessionId: body.resumeSessionId,
       });
 
       // Re-track container with real session ID
@@ -282,9 +248,6 @@ export function createRoutes(
 
   api.delete("/sessions/:id", async (c) => {
     const id = c.req.param("id");
-    if (assistantManager?.isAssistantSession(id)) {
-      return c.json({ error: "Cannot delete the assistant session. Use companion assistant stop instead." }, 403);
-    }
     await launcher.kill(id);
 
     // Clean up container if any
@@ -301,9 +264,6 @@ export function createRoutes(
 
   api.post("/sessions/:id/archive", async (c) => {
     const id = c.req.param("id");
-    if (assistantManager?.isAssistantSession(id)) {
-      return c.json({ error: "Cannot archive the assistant session. Use companion assistant stop instead." }, 403);
-    }
     const body = await c.req.json().catch(() => ({}));
     await launcher.kill(id);
 
@@ -326,6 +286,64 @@ export function createRoutes(
     launcher.setArchived(id, false);
     sessionStore.setArchived(id, false);
     return c.json({ ok: true });
+  });
+
+  // ─── CLI Sessions (for resuming external sessions) ─────────────
+
+  api.get("/sessions/cli-sessions", (c) => {
+    const claudeProjectsDir = join(homedir(), ".claude", "projects");
+    if (!existsSync(claudeProjectsDir)) {
+      return c.json([]);
+    }
+
+    interface CliSession {
+      sessionId: string;
+      project: string;
+      cwd: string;
+      lastModified: number;
+    }
+
+    const sessions: CliSession[] = [];
+    try {
+      const projectDirs = readdirSync(claudeProjectsDir, { withFileTypes: true });
+
+      for (const dir of projectDirs) {
+        if (!dir.isDirectory()) continue;
+        const projectPath = join(claudeProjectsDir, dir.name);
+        // Convert slug back to path: -home-kev-project → /home/kev/project
+        const cwd = dir.name.replace(/^-/, "/").replace(/-/g, "/");
+
+        try {
+          const files = readdirSync(projectPath);
+          for (const file of files) {
+            // Session files are UUID.jsonl
+            const match = file.match(/^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/);
+            if (!match) continue;
+
+            const filePath = join(projectPath, file);
+            try {
+              const fileStat = statSync(filePath);
+              sessions.push({
+                sessionId: match[1],
+                project: dir.name,
+                cwd,
+                lastModified: fileStat.mtimeMs,
+              });
+            } catch {
+              // Skip files we can't stat
+            }
+          }
+        } catch {
+          // Skip dirs we can't read
+        }
+      }
+    } catch {
+      return c.json([]);
+    }
+
+    // Sort by most recently modified first, limit to 50
+    sessions.sort((a, b) => b.lastModified - a.lastModified);
+    return c.json(sessions.slice(0, 50));
   });
 
   // ─── Recording Management ──────────────────────────────────
@@ -364,8 +382,21 @@ export function createRoutes(
   api.get("/backends", (c) => {
     const backends: Array<{ id: string; name: string; available: boolean }> = [];
 
-    backends.push({ id: "claude", name: "Claude Code", available: resolveBinary("claude") !== null });
-    backends.push({ id: "codex", name: "Codex", available: resolveBinary("codex") !== null });
+    // Check Claude Code
+    let claudeAvailable = false;
+    try {
+      execSync("which claude", { encoding: "utf-8", timeout: 3000 });
+      claudeAvailable = true;
+    } catch {}
+    backends.push({ id: "claude", name: "Claude Code", available: claudeAvailable });
+
+    // Check Codex
+    let codexAvailable = false;
+    try {
+      execSync("which codex", { encoding: "utf-8", timeout: 3000 });
+      codexAvailable = true;
+    } catch {}
+    backends.push({ id: "codex", name: "Codex", available: codexAvailable });
 
     return c.json(backends);
   });
@@ -567,22 +598,13 @@ export function createRoutes(
         timeout: 5000,
       }).trim() || absPath;
 
-      let diff = "";
-      const diffBases = resolveBranchDiffBases(repoRoot);
-      for (const base of diffBases) {
-        try {
-          diff = execCaptureStdout(`git diff ${base} -- "${relPath}"`, {
-            cwd: repoRoot,
-            encoding: "utf-8",
-            timeout: 5000,
-          });
-          break;
-        } catch {
-          // If a base ref is unavailable, try the next candidate.
-        }
-      }
+      let diff = execCaptureStdout(`git diff HEAD -- "${relPath}"`, {
+        cwd: repoRoot,
+        encoding: "utf-8",
+        timeout: 5000,
+      });
 
-      // For untracked files, base-branch diff is empty. Show full file as added.
+      // For untracked files, HEAD diff is empty. Show full file as added.
       if (!diff.trim()) {
         const untracked = execSync(`git ls-files --others --exclude-standard -- "${relPath}"`, {
           cwd: repoRoot,
@@ -893,15 +915,7 @@ export function createRoutes(
 
   // ─── Update checking ─────────────────────────────────────────────────
 
-  api.get("/update-check", async (c) => {
-    const initialState = getUpdateState();
-    const needsRefresh =
-      initialState.lastChecked === 0
-      || Date.now() - initialState.lastChecked > UPDATE_CHECK_STALE_MS;
-    if (needsRefresh) {
-      await checkForUpdate();
-    }
-
+  api.get("/update-check", (c) => {
     const state = getUpdateState();
     return c.json({
       currentVersion: state.currentVersion,
@@ -963,47 +977,11 @@ export function createRoutes(
           setUpdateInProgress(false);
           return;
         }
-
-        // Refresh the service definition so the new unit/plist template
-        // (e.g. Restart=always) takes effect for existing installations.
-        try {
-          refreshServiceDefinition();
-          console.log("[update] Service definition refreshed.");
-        } catch (err) {
-          console.warn("[update] Failed to refresh service definition:", err);
-        }
-
         console.log(
-          "[update] Update successful, restarting service...",
+          "[update] Update successful, exiting for service restart...",
         );
-
-        // Explicitly restart via the service manager in a detached process
-        // so the restart survives our own exit.
-        const isLinux = process.platform === "linux";
-        const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-        const restartCmd = isLinux
-          ? ["systemctl", "--user", "restart", "the-companion.service"]
-          : uid !== undefined
-            ? ["launchctl", "kickstart", "-k", `gui/${uid}/sh.thecompanion.app`]
-            : ["launchctl", "kickstart", "-k", "sh.thecompanion.app"];
-
-        Bun.spawn(restartCmd, {
-          stdout: "ignore",
-          stderr: "ignore",
-          stdin: "ignore",
-          env: isLinux
-            ? {
-                ...process.env,
-                XDG_RUNTIME_DIR:
-                  process.env.XDG_RUNTIME_DIR ||
-                  `/run/user/${uid ?? 1000}`,
-              }
-            : undefined,
-        });
-
-        // Give the spawn a moment to dispatch, then exit cleanly.
-        // The service manager restart will kill us if we haven't exited yet.
-        setTimeout(() => process.exit(0), 500);
+        // Exit with non-zero code so the service manager restarts us
+        process.exit(42);
       } catch (err) {
         console.error("[update] Update failed:", err);
         setUpdateInProgress(false);
@@ -1079,254 +1057,6 @@ export function createRoutes(
   api.post("/terminal/kill", (c) => {
     terminalManager.kill();
     return c.json({ ok: true });
-  });
-
-  // ─── Cross-session messaging ───────────────────────────────────────
-
-  api.post("/sessions/:id/message", async (c) => {
-    const id = c.req.param("id");
-    const session = launcher.getSession(id);
-    if (!session) return c.json({ error: "Session not found" }, 404);
-    if (!launcher.isAlive(id)) return c.json({ error: "Session is not running" }, 400);
-    const body = await c.req.json().catch(() => ({}));
-    if (typeof body.content !== "string" || !body.content.trim()) {
-      return c.json({ error: "content is required" }, 400);
-    }
-    wsBridge.injectUserMessage(id, body.content);
-    return c.json({ ok: true, sessionId: id });
-  });
-
-  // ─── Companion Assistant ──────────────────────────────────────────
-
-  api.get("/assistant/status", (c) => {
-    if (!assistantManager) return c.json({ error: "Assistant not available" }, 501);
-    return c.json(assistantManager.getStatus());
-  });
-
-  api.post("/assistant/launch", async (c) => {
-    if (!assistantManager) return c.json({ error: "Assistant not available" }, 501);
-    const session = await assistantManager.start();
-    if (!session) return c.json({ error: "Failed to launch assistant" }, 500);
-    return c.json({ ok: true, sessionId: session.sessionId });
-  });
-
-  api.post("/assistant/stop", async (c) => {
-    if (!assistantManager) return c.json({ error: "Assistant not available" }, 501);
-    const stopped = await assistantManager.stop();
-    return c.json({ ok: stopped });
-  });
-
-  api.get("/assistant/config", (c) => {
-    if (!assistantManager) return c.json({ error: "Assistant not available" }, 501);
-    return c.json(assistantManager.getConfig());
-  });
-
-  api.put("/assistant/config", async (c) => {
-    if (!assistantManager) return c.json({ error: "Assistant not available" }, 501);
-    const body = await c.req.json().catch(() => ({}));
-    const config = assistantManager.updateConfig({
-      model: typeof body.model === "string" ? body.model : undefined,
-      permissionMode: typeof body.permissionMode === "string" ? body.permissionMode : undefined,
-      enabled: typeof body.enabled === "boolean" ? body.enabled : undefined,
-    });
-    return c.json(config);
-  });
-
-  // ─── Skills ─────────────────────────────────────────────────────────
-
-  const SKILLS_DIR = join(homedir(), ".claude", "skills");
-
-  api.get("/skills", async (c) => {
-    try {
-      if (!existsSync(SKILLS_DIR)) return c.json([]);
-      const entries = await readdir(SKILLS_DIR, { withFileTypes: true });
-      const skills = [];
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        const skillMdPath = join(SKILLS_DIR, entry.name, "SKILL.md");
-        if (!existsSync(skillMdPath)) continue;
-        const content = await readFile(skillMdPath, "utf-8");
-        // Parse frontmatter
-        const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-        let name = entry.name;
-        let description = "";
-        let body = content;
-        if (fmMatch) {
-          body = fmMatch[2];
-          for (const line of fmMatch[1].split("\n")) {
-            const nameMatch = line.match(/^name:\s*(.+)/);
-            if (nameMatch) name = nameMatch[1].trim().replace(/^["']|["']$/g, "");
-            const descMatch = line.match(/^description:\s*["']?(.+?)["']?\s*$/);
-            if (descMatch) description = descMatch[1];
-          }
-        }
-        skills.push({ slug: entry.name, name, description, path: skillMdPath });
-      }
-      return c.json(skills);
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  api.get("/skills/:slug", async (c) => {
-    const slug = c.req.param("slug");
-    if (!slug || slug.includes("..") || slug.includes("/") || slug.includes("\\")) {
-      return c.json({ error: "Invalid slug" }, 400);
-    }
-    const skillMdPath = join(SKILLS_DIR, slug, "SKILL.md");
-    if (!existsSync(skillMdPath)) return c.json({ error: "Skill not found" }, 404);
-    const content = await readFile(skillMdPath, "utf-8");
-    return c.json({ slug, path: skillMdPath, content });
-  });
-
-  api.post("/skills", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    const { name, description, content } = body;
-    if (!name || typeof name !== "string") {
-      return c.json({ error: "name is required" }, 400);
-    }
-    // Slugify: lowercase, replace non-alphanumeric with dashes
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-    if (!slug) return c.json({ error: "Invalid name" }, 400);
-
-    const skillDir = join(SKILLS_DIR, slug);
-    const skillMdPath = join(skillDir, "SKILL.md");
-
-    if (existsSync(skillMdPath)) {
-      return c.json({ error: `Skill "${slug}" already exists` }, 409);
-    }
-
-    const { mkdirSync, writeFileSync } = await import("node:fs");
-    mkdirSync(skillDir, { recursive: true });
-
-    const md = `---\nname: ${slug}\ndescription: ${JSON.stringify(description || `Skill: ${name}`)}\n---\n\n${content || `# ${name}\n\nDescribe what this skill does and how to use it.\n`}`;
-    writeFileSync(skillMdPath, md);
-
-    return c.json({ slug, name, description: description || `Skill: ${name}`, path: skillMdPath });
-  });
-
-  api.put("/skills/:slug", async (c) => {
-    const slug = c.req.param("slug");
-    if (!slug || slug.includes("..") || slug.includes("/") || slug.includes("\\")) {
-      return c.json({ error: "Invalid slug" }, 400);
-    }
-    const skillMdPath = join(SKILLS_DIR, slug, "SKILL.md");
-    if (!existsSync(skillMdPath)) return c.json({ error: "Skill not found" }, 404);
-    const body = await c.req.json().catch(() => ({}));
-    if (typeof body.content !== "string") {
-      return c.json({ error: "content is required" }, 400);
-    }
-    await writeFile(skillMdPath, body.content);
-    return c.json({ ok: true, slug, path: skillMdPath });
-  });
-
-  api.delete("/skills/:slug", async (c) => {
-    const slug = c.req.param("slug");
-    if (!slug || slug.includes("..") || slug.includes("/") || slug.includes("\\")) {
-      return c.json({ error: "Invalid slug" }, 400);
-    }
-    const skillDir = join(SKILLS_DIR, slug);
-    if (!existsSync(skillDir)) return c.json({ error: "Skill not found" }, 404);
-    const { rmSync } = await import("node:fs");
-    rmSync(skillDir, { recursive: true });
-    return c.json({ ok: true, slug });
-  });
-
-  // ─── Cron Jobs ──────────────────────────────────────────────────────
-
-  api.get("/cron/jobs", (c) => {
-    const jobs = cronStore.listJobs();
-    const enriched = jobs.map((j) => ({
-      ...j,
-      nextRunAt: cronScheduler?.getNextRunTime(j.id)?.getTime() ?? null,
-    }));
-    return c.json(enriched);
-  });
-
-  api.get("/cron/jobs/:id", (c) => {
-    const job = cronStore.getJob(c.req.param("id"));
-    if (!job) return c.json({ error: "Job not found" }, 404);
-    return c.json({
-      ...job,
-      nextRunAt: cronScheduler?.getNextRunTime(job.id)?.getTime() ?? null,
-    });
-  });
-
-  api.post("/cron/jobs", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    try {
-      const job = cronStore.createJob({
-        name: body.name || "",
-        prompt: body.prompt || "",
-        schedule: body.schedule || "",
-        recurring: body.recurring ?? true,
-        backendType: body.backendType || "claude",
-        model: body.model || "",
-        cwd: body.cwd || "",
-        envSlug: body.envSlug,
-        enabled: body.enabled ?? true,
-        permissionMode: body.permissionMode || "bypassPermissions",
-        codexInternetAccess: body.codexInternetAccess,
-      });
-      if (job.enabled) cronScheduler?.scheduleJob(job);
-      return c.json(job, 201);
-    } catch (e: unknown) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
-    }
-  });
-
-  api.put("/cron/jobs/:id", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json().catch(() => ({}));
-    try {
-      // Only allow user-editable fields — prevent tampering with internal tracking
-      const allowed: Record<string, unknown> = {};
-      for (const key of ["name", "prompt", "schedule", "recurring", "backendType", "model", "cwd", "envSlug", "enabled", "permissionMode", "codexInternetAccess"] as const) {
-        if (key in body) allowed[key] = body[key];
-      }
-      const job = cronStore.updateJob(id, allowed);
-      if (!job) return c.json({ error: "Job not found" }, 404);
-      // Stop the old timer (id may differ from job.id after a rename)
-      if (job.id !== id) cronScheduler?.stopJob(id);
-      cronScheduler?.scheduleJob(job);
-      return c.json(job);
-    } catch (e: unknown) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
-    }
-  });
-
-  api.delete("/cron/jobs/:id", (c) => {
-    const id = c.req.param("id");
-    cronScheduler?.stopJob(id);
-    const deleted = cronStore.deleteJob(id);
-    if (!deleted) return c.json({ error: "Job not found" }, 404);
-    return c.json({ ok: true });
-  });
-
-  api.post("/cron/jobs/:id/toggle", (c) => {
-    const id = c.req.param("id");
-    const job = cronStore.getJob(id);
-    if (!job) return c.json({ error: "Job not found" }, 404);
-    const updated = cronStore.updateJob(id, { enabled: !job.enabled });
-    if (updated?.enabled) {
-      cronScheduler?.scheduleJob(updated);
-    } else {
-      cronScheduler?.stopJob(id);
-    }
-    return c.json(updated);
-  });
-
-  api.post("/cron/jobs/:id/run", (c) => {
-    const id = c.req.param("id");
-    const job = cronStore.getJob(id);
-    if (!job) return c.json({ error: "Job not found" }, 404);
-    cronScheduler?.executeJobManually(id);
-    return c.json({ ok: true, message: "Job triggered" });
-  });
-
-  api.get("/cron/jobs/:id/executions", (c) => {
-    const id = c.req.param("id");
-    return c.json(cronScheduler?.getExecutions(id) ?? []);
   });
 
   return api;
