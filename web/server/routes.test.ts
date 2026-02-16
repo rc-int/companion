@@ -79,10 +79,26 @@ vi.mock("./usage-limits.js", () => ({
 }));
 
 vi.mock("./update-checker.js", () => ({
-  getUpdateState: vi.fn(() => ({ ...mockUpdateCheckerState })),
-  checkForUpdate: mockCheckForUpdate,
-  isUpdateAvailable: mockIsUpdateAvailable,
-  setUpdateInProgress: mockSetUpdateInProgress,
+  getUpdateState: vi.fn(() => ({
+    wilco: { current: "0.1.0", latest: null },
+    companion: { current: "0.29.0", latest: null },
+    lastChecked: 0,
+    checking: false,
+    updateInProgress: false,
+  })),
+  checkForUpdate: vi.fn(async () => {}),
+  isUpdateAvailable: vi.fn(() => false),
+  isNewerVersion: vi.fn((a: string, b: string) => {
+    const pa = a.replace(/^v/, "").split(".").map(Number);
+    const pb = b.replace(/^v/, "").split(".").map(Number);
+    for (let i = 0; i < 3; i++) {
+      if ((pa[i] || 0) > (pb[i] || 0)) return true;
+      if ((pa[i] || 0) < (pb[i] || 0)) return false;
+    }
+    return false;
+  }),
+  setUpdateInProgress: vi.fn(),
+}));
 }));
 
 import { Hono } from "hono";

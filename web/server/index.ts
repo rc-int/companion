@@ -24,8 +24,7 @@ import { PRPoller } from "./pr-poller.js";
 import { RecorderManager } from "./recorder.js";
 import { CronScheduler } from "./cron-scheduler.js";
 import { AssistantManager } from "./assistant-manager.js";
-import { startPeriodicCheck, setServiceMode } from "./update-checker.js";
-import { isRunningAsService } from "./service.js";
+import { startPeriodicCheck } from "./update-checker.js";
 import type { SocketData } from "./ws-bridge.js";
 import type { ServerWebSocket } from "bun";
 
@@ -227,12 +226,8 @@ if (assistantConfig.enabled) {
 }
 
 // ── Update checker ──────────────────────────────────────────────────────────
+console.log("[server] Starting update checker...");
 startPeriodicCheck();
-if (isRunningAsService()) {
-  setServiceMode(true);
-  console.log("[server] Running as background service (auto-update available)");
-}
-
 // ── Reconnection watchdog ────────────────────────────────────────────────────
 // After a server restart, restored CLI processes may not reconnect their
 // WebSocket. Give them a grace period, then kill + relaunch any that are

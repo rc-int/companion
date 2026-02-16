@@ -8,8 +8,15 @@ export function UpdateBanner() {
   const dismissUpdate = useStore((s) => s.dismissUpdate);
   const [updating, setUpdating] = useState(false);
 
-  if (!updateInfo?.updateAvailable || !updateInfo.latestVersion) return null;
-  if (dismissedVersion === updateInfo.latestVersion) return null;
+  if (!updateInfo) return null;
+
+  const wilcoUpdate = updateInfo.wilco.updateAvailable;
+  const companionUpdate = updateInfo.companion.updateAvailable;
+  if (!wilcoUpdate && !companionUpdate) return null;
+
+  // Composite dismiss key: "wilcoLatest+companionLatest"
+  const dismissKey = `${updateInfo.wilco.latest ?? updateInfo.wilco.current}+${updateInfo.companion.latest ?? updateInfo.companion.current}`;
+  if (dismissedVersion === dismissKey) return null;
 
   const handleUpdate = async () => {
     setUpdating(true);
@@ -22,10 +29,19 @@ export function UpdateBanner() {
   };
 
   const handleDismiss = () => {
-    dismissUpdate(updateInfo.latestVersion!);
+    dismissUpdate(dismissKey);
   };
 
   const inProgress = updating || updateInfo.updateInProgress;
+
+  // Build version summary
+  const parts: string[] = [];
+  if (wilcoUpdate) {
+    parts.push(`wilco ${updateInfo.wilco.current} → ${updateInfo.wilco.latest}`);
+  }
+  if (companionUpdate) {
+    parts.push(`companion ${updateInfo.companion.current} → ${updateInfo.companion.latest}`);
+  }
 
   return (
     <div className="px-4 py-1.5 bg-cc-primary/10 border-b border-cc-primary/20 flex items-center justify-center gap-3 animate-[fadeSlideIn_0.2s_ease-out]">
@@ -34,27 +50,16 @@ export function UpdateBanner() {
       </svg>
 
       <span className="text-xs text-cc-fg">
-        <span className="font-medium">v{updateInfo.latestVersion}</span> available
-        <span className="text-cc-muted ml-1">(current: v{updateInfo.currentVersion})</span>
+        {parts.join(", ")}
       </span>
 
-      {updateInfo.isServiceMode ? (
-        <button
-          onClick={handleUpdate}
-          disabled={inProgress}
-          className="text-xs font-medium px-2.5 py-0.5 rounded-md bg-cc-primary hover:bg-cc-primary-hover text-white transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {inProgress ? "Updating..." : "Update & Restart"}
-        </button>
-      ) : (
-        <span className="text-xs text-cc-muted">
-          Run{" "}
-          <code className="font-mono-code bg-cc-code-bg px-1 py-0.5 rounded text-cc-code-fg">
-            the-companion install
-          </code>{" "}
-          for auto-updates
-        </span>
-      )}
+      <button
+        onClick={handleUpdate}
+        disabled={inProgress}
+        className="text-xs font-medium px-2.5 py-0.5 rounded-md bg-cc-primary hover:bg-cc-primary-hover text-white transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {inProgress ? "Updating..." : "Update & Restart"}
+      </button>
 
       <button
         onClick={handleDismiss}
