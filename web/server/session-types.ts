@@ -136,6 +136,16 @@ export interface CLIAuthStatusMessage {
   session_id: string;
 }
 
+export interface CLIControlResponseMessage {
+  type: "control_response";
+  response: {
+    subtype: "success" | "error";
+    request_id: string;
+    response?: Record<string, unknown>;
+    error?: string;
+  };
+}
+
 export type CLIMessage =
   | CLISystemInitMessage
   | CLISystemStatusMessage
@@ -145,6 +155,7 @@ export type CLIMessage =
   | CLIToolProgressMessage
   | CLIToolUseSummaryMessage
   | CLIControlRequestMessage
+  | CLIControlResponseMessage
   | CLIKeepAliveMessage
   | CLIAuthStatusMessage;
 
@@ -160,14 +171,20 @@ export type ContentBlock =
 
 /** Messages the browser sends to the bridge */
 export type BrowserOutgoingMessage =
-  | { type: "user_message"; content: string; session_id?: string; images?: { media_type: string; data: string }[] }
-  | { type: "permission_response"; request_id: string; behavior: "allow" | "deny"; updated_input?: Record<string, unknown>; updated_permissions?: PermissionUpdate[]; message?: string }
-  | { type: "interrupt" }
-  | { type: "set_model"; model: string }
-  | { type: "set_permission_mode"; mode: string };
+  | { type: "user_message"; content: string; session_id?: string; images?: { media_type: string; data: string }[]; client_msg_id?: string }
+  | { type: "permission_response"; request_id: string; behavior: "allow" | "deny"; updated_input?: Record<string, unknown>; updated_permissions?: PermissionUpdate[]; message?: string; client_msg_id?: string }
+  | { type: "session_subscribe"; last_seq: number }
+  | { type: "session_ack"; last_seq: number }
+  | { type: "interrupt"; client_msg_id?: string }
+  | { type: "set_model"; model: string; client_msg_id?: string }
+  | { type: "set_permission_mode"; mode: string; client_msg_id?: string }
+  | { type: "mcp_get_status"; client_msg_id?: string }
+  | { type: "mcp_toggle"; serverName: string; enabled: boolean; client_msg_id?: string }
+  | { type: "mcp_reconnect"; serverName: string; client_msg_id?: string }
+  | { type: "mcp_set_servers"; servers: Record<string, McpServerConfig>; client_msg_id?: string };
 
 /** Messages the bridge sends to the browser */
-export type BrowserIncomingMessage =
+export type BrowserIncomingMessageBase =
   | { type: "session_init"; session: SessionState }
   | { type: "session_update"; session: Partial<SessionState> }
   | { type: "assistant"; message: CLIAssistantMessage["message"]; parent_tool_use_id: string | null; timestamp?: number }
@@ -184,8 +201,19 @@ export type BrowserIncomingMessage =
   | { type: "cli_connected" }
   | { type: "user_message"; content: string; timestamp: number; id?: string }
   | { type: "message_history"; messages: BrowserIncomingMessage[] }
+  | { type: "event_replay"; events: BufferedBrowserEvent[] }
   | { type: "session_name_update"; name: string }
-  | { type: "pr_status_update"; pr: import("./github-pr.js").GitHubPRInfo | null; available: boolean };
+  | { type: "pr_status_update"; pr: import("./github-pr.js").GitHubPRInfo | null; available: boolean }
+  | { type: "mcp_status"; servers: McpServerDetail[] };
+
+export type BrowserIncomingMessage = BrowserIncomingMessageBase & { seq?: number };
+
+export type ReplayableBrowserIncomingMessage = Exclude<BrowserIncomingMessageBase, { type: "event_replay" }>;
+
+export interface BufferedBrowserEvent {
+  seq: number;
+  message: ReplayableBrowserIncomingMessage;
+}
 
 // ─── Session State ────────────────────────────────────────────────────────────
 
@@ -214,6 +242,43 @@ export interface SessionState {
   git_behind: number;
   total_lines_added: number;
   total_lines_removed: number;
+  // Codex-specific token details (forwarded from thread/tokenUsage/updated)
+  codex_token_details?: {
+    inputTokens: number;
+    outputTokens: number;
+    cachedInputTokens: number;
+    reasoningOutputTokens: number;
+    modelContextWindow: number;
+  };
+  // Codex-specific rate limits (forwarded from account/rateLimits/updated)
+  codex_rate_limits?: {
+    primary: { usedPercent: number; windowDurationMins: number; resetsAt: number } | null;
+    secondary: { usedPercent: number; windowDurationMins: number; resetsAt: number } | null;
+  };
+  /** If this session was spawned by a cron job */
+  cronJobId?: string;
+  /** Human-readable name of the cron job that spawned this session */
+  cronJobName?: string;
+}
+
+// ─── MCP Types ───────────────────────────────────────────────────────────────
+
+export interface McpServerConfig {
+  type: "stdio" | "sse" | "http" | "sdk";
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+}
+
+export interface McpServerDetail {
+  name: string;
+  status: "connected" | "failed" | "disabled" | "connecting";
+  serverInfo?: unknown;
+  error?: string;
+  config: { type: string; url?: string; command?: string; args?: string[] };
+  scope: string;
+  tools?: { name: string; annotations?: { readOnly?: boolean; destructive?: boolean; openWorld?: boolean } }[];
 }
 
 // ─── Permission Request ──────────────────────────────────────────────────────

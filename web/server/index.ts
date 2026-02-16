@@ -1,5 +1,11 @@
 process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = "1";
 
+// Enrich process PATH at startup so binary resolution and `which` calls can find
+// binaries installed via version managers (nvm, volta, fnm, etc.).
+// Critical when running as a launchd/systemd service with a restricted PATH.
+import { getEnrichedPath } from "./path-resolver.js";
+process.env.PATH = getEnrichedPath();
+
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
@@ -15,6 +21,9 @@ import { generateSessionTitle } from "./auto-namer.js";
 import * as sessionNames from "./session-names.js";
 import { getSettings } from "./settings-manager.js";
 import { PRPoller } from "./pr-poller.js";
+import { RecorderManager } from "./recorder.js";
+import { CronScheduler } from "./cron-scheduler.js";
+import { AssistantManager } from "./assistant-manager.js";
 import { startPeriodicCheck } from "./update-checker.js";
 import type { SocketData } from "./ws-bridge.js";
 import type { ServerWebSocket } from "bun";
@@ -32,21 +41,35 @@ const launcher = new CliLauncher(port);
 const worktreeTracker = new WorktreeTracker();
 const terminalManager = new TerminalManager();
 const prPoller = new PRPoller(wsBridge);
+const recorder = new RecorderManager();
+const cronScheduler = new CronScheduler(launcher, wsBridge);
+const assistantManager = new AssistantManager(launcher, wsBridge, port);
 
 // ── Restore persisted sessions from disk ────────────────────────────────────
 wsBridge.setStore(sessionStore);
+wsBridge.setRecorder(recorder);
 launcher.setStore(sessionStore);
+launcher.setRecorder(recorder);
 launcher.restoreFromDisk();
 wsBridge.restoreFromDisk();
 
 // When the CLI reports its internal session_id, store it for --resume on relaunch
 wsBridge.onCLISessionIdReceived((sessionId, cliSessionId) => {
   launcher.setCLISessionId(sessionId, cliSessionId);
+  // Also store for the assistant manager (for --resume across server restarts)
+  if (assistantManager.isAssistantSession(sessionId)) {
+    assistantManager.setCLISessionId(cliSessionId);
+  }
 });
 
 // When a Codex adapter is created, attach it to the WsBridge
 launcher.onCodexAdapterCreated((sessionId, adapter) => {
   wsBridge.attachCodexAdapter(sessionId, adapter);
+});
+
+// When a CLI process exits, notify the assistant manager for auto-relaunch
+launcher.onSessionExited((sessionId) => {
+  assistantManager.handleCliExit(sessionId);
 });
 
 // Start watching PRs when git info is resolved for a session
@@ -73,8 +96,10 @@ wsBridge.onCLIRelaunchNeededCallback(async (sessionId) => {
 
 // Auto-generate session title after first turn completes
 wsBridge.onFirstTurnCompletedCallback(async (sessionId, firstUserMessage) => {
-  // Don't overwrite a name that was already set (manual rename or prior auto-name)
+  // Don't overwrite a name that was already set (manual rename, prior auto-name, or assistant)
   if (sessionNames.getName(sessionId)) return;
+  // Skip auto-naming for the assistant session
+  if (assistantManager.isAssistantSession(sessionId)) return;
   if (!getSettings().openrouterApiKey.trim()) return;
   const info = launcher.getSession(sessionId);
   const model = info?.model || "claude-sonnet-4-5-20250929";
@@ -89,11 +114,14 @@ wsBridge.onFirstTurnCompletedCallback(async (sessionId, firstUserMessage) => {
 });
 
 console.log(`[server] Session persistence: ${sessionStore.directory}`);
+if (recorder.isGloballyEnabled()) {
+  console.log(`[server] Recording enabled (dir: ${recorder.getRecordingsDir()}, max: ${recorder.getMaxLines()} lines)`);
+}
 
 const app = new Hono();
 
 app.use("/api/*", cors());
-app.route("/api", createRoutes(launcher, wsBridge, sessionStore, worktreeTracker, terminalManager, prPoller));
+app.route("/api", createRoutes(launcher, wsBridge, sessionStore, worktreeTracker, terminalManager, prPoller, recorder, cronScheduler, assistantManager));
 
 // In production, serve built frontend using absolute path (works when installed as npm package)
 if (process.env.NODE_ENV === "production") {
@@ -184,6 +212,17 @@ console.log(`  Browser WebSocket: ws://localhost:${server.port}/ws/browser/:sess
 
 if (process.env.NODE_ENV !== "production") {
   console.log("Dev mode: frontend at http://localhost:5174");
+}
+
+// ── Cron scheduler ──────────────────────────────────────────────────────────
+cronScheduler.startAll();
+
+// ── Companion Assistant ─────────────────────────────────────────────────────
+const assistantConfig = assistantManager.getConfig();
+if (assistantConfig.enabled) {
+  assistantManager.start().catch((e) => {
+    console.error("[server] Failed to auto-start assistant:", e);
+  });
 }
 
 // ── Update checker ──────────────────────────────────────────────────────────

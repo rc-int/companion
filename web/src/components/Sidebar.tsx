@@ -2,8 +2,6 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useStore } from "../store.js";
 import { api } from "../api.js";
 import { connectSession, connectAllSessions, disconnectSession } from "../ws.js";
-import { EnvManager } from "./EnvManager.js";
-import { FolderPicker } from "./FolderPicker.js";
 import { ProjectGroup } from "./ProjectGroup.js";
 import { SessionItem } from "./SessionItem.js";
 import { groupSessionsByProject, type SessionItem as SessionItemType } from "../utils/project-grouping.js";
@@ -11,28 +9,29 @@ import { groupSessionsByProject, type SessionItem as SessionItemType } from "../
 export function Sidebar() {
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
-  const [showEnvManager, setShowEnvManager] = useState(false);
-  const [showTerminalPicker, setShowTerminalPicker] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
+  const [hash, setHash] = useState(() => (typeof window !== "undefined" ? window.location.hash : ""));
   const editInputRef = useRef<HTMLInputElement>(null);
   const sessions = useStore((s) => s.sessions);
   const sdkSessions = useStore((s) => s.sdkSessions);
   const currentSessionId = useStore((s) => s.currentSessionId);
   const setCurrentSession = useStore((s) => s.setCurrentSession);
-  const darkMode = useStore((s) => s.darkMode);
-  const toggleDarkMode = useStore((s) => s.toggleDarkMode);
-  const notificationSound = useStore((s) => s.notificationSound);
-  const toggleNotificationSound = useStore((s) => s.toggleNotificationSound);
   const cliConnected = useStore((s) => s.cliConnected);
   const sessionStatus = useStore((s) => s.sessionStatus);
   const removeSession = useStore((s) => s.removeSession);
   const sessionNames = useStore((s) => s.sessionNames);
   const recentlyRenamed = useStore((s) => s.recentlyRenamed);
+  const clearRecentlyRenamed = useStore((s) => s.clearRecentlyRenamed);
   const pendingPermissions = useStore((s) => s.pendingPermissions);
+  const assistantSessionId = useStore((s) => s.assistantSessionId);
+  const setAssistantSessionId = useStore((s) => s.setAssistantSessionId);
   const collapsedProjects = useStore((s) => s.collapsedProjects);
   const toggleProjectCollapse = useStore((s) => s.toggleProjectCollapse);
-  const terminalOpen = useStore((s) => s.terminalOpen);
+  const isSettingsPage = hash === "#/settings";
+  const isTerminalPage = hash === "#/terminal";
+  const isEnvironmentsPage = hash === "#/environments";
+  const isScheduledPage = hash === "#/scheduled";
 
   // Poll for SDK sessions on mount
   useEffect(() => {
@@ -71,7 +70,29 @@ export function Sidebar() {
     };
   }, []);
 
+  // Hydrate assistant session ID from server on mount
+  useEffect(() => {
+    api.getAssistantStatus().then((status) => {
+      if (status.running && status.sessionId) {
+        useStore.getState().setAssistantSessionId(status.sessionId);
+      } else {
+        // Clear stale session ID if the assistant is not running
+        useStore.getState().setAssistantSessionId(null);
+      }
+    }).catch(() => {
+      // server not ready
+    });
+  }, []);
+
+  useEffect(() => {
+    const onHashChange = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
   function handleSelectSession(sessionId: string) {
+    useStore.getState().closeTerminal();
+    window.location.hash = "";
     if (currentSessionId === sessionId) return;
     setCurrentSession(sessionId);
     // Ensure connected (idempotent — no-op if already connected)
@@ -83,6 +104,8 @@ export function Sidebar() {
   }
 
   function handleNewSession() {
+    useStore.getState().closeTerminal();
+    window.location.hash = "";
     useStore.getState().newSession();
     if (window.innerWidth < 768) {
       useStore.getState().setSidebarOpen(false);
@@ -210,11 +233,13 @@ export function Sidebar() {
       backendType: bridgeState?.backend_type || sdkInfo?.backendType || "claude",
       repoRoot: bridgeState?.repo_root || sdkInfo?.repoRoot || "",
       permCount: pendingPermissions.get(id)?.size ?? 0,
+      cronJobId: bridgeState?.cronJobId || sdkInfo?.cronJobId,
+      cronJobName: bridgeState?.cronJobName || sdkInfo?.cronJobName,
     };
   }).sort((a, b) => b.createdAt - a.createdAt);
 
-  const activeSessions = allSessionList.filter((s) => !s.archived);
-  const archivedSessions = allSessionList.filter((s) => s.archived);
+  const activeSessions = allSessionList.filter((s) => !s.archived && s.id !== assistantSessionId);
+  const archivedSessions = allSessionList.filter((s) => s.archived && s.id !== assistantSessionId);
   const currentSession = currentSessionId ? allSessionList.find((s) => s.id === currentSessionId) : null;
   const logoSrc = currentSession?.backendType === "codex" ? "/logo-codex.svg" : "/logo.svg";
 
@@ -231,6 +256,7 @@ export function Sidebar() {
     onArchive: handleArchiveSession,
     onUnarchive: handleUnarchiveSession,
     onDelete: handleDeleteSession,
+    onClearRecentlyRenamed: clearRecentlyRenamed,
     editingSessionId,
     editingName,
     setEditingName,
@@ -257,6 +283,69 @@ export function Sidebar() {
           </svg>
           New Session
         </button>
+
+        {(() => {
+          const isActive = !!(currentSessionId === assistantSessionId && assistantSessionId);
+          const isAlive = !!(assistantSessionId && cliConnected.get(assistantSessionId));
+          return (
+            <button
+              onClick={async () => {
+                useStore.getState().closeTerminal();
+                window.location.hash = "";
+                if (assistantSessionId) {
+                  handleSelectSession(assistantSessionId);
+                } else {
+                  try {
+                    const result = await api.launchAssistant();
+                    if (result.sessionId) {
+                      setAssistantSessionId(result.sessionId);
+                      connectSession(result.sessionId);
+                      setCurrentSession(result.sessionId);
+                    }
+                  } catch (e) {
+                    console.error("[sidebar] Failed to launch assistant:", e);
+                  }
+                }
+                if (window.innerWidth < 768) {
+                  useStore.getState().setSidebarOpen(false);
+                }
+              }}
+              className={`companion-btn ${isActive ? "companion-active" : ""} group/companion w-full mt-2.5 py-2.5 px-3 rounded-[12px] transition-all duration-300 flex items-center gap-3 cursor-pointer relative ${
+                isActive
+                  ? "bg-cc-primary/[0.06] text-cc-fg"
+                  : "text-cc-muted hover:text-cc-fg"
+              }`}
+            >
+              {/* Icon — constellation sparkle */}
+              <span className={`relative flex items-center justify-center w-7 h-7 rounded-[8px] transition-all duration-300 ${
+                isAlive ? "companion-sparkle-active" : ""
+              } ${
+                isActive
+                  ? "bg-cc-primary text-white shadow-[0_2px_8px_rgba(174,86,48,0.3)]"
+                  : "bg-cc-primary/10 text-cc-primary group-hover/companion:bg-cc-primary/15 group-hover/companion:shadow-[0_1px_4px_rgba(174,86,48,0.15)]"
+              }`}>
+                <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
+                  <path d="M8 0c.2 2.7 1.4 5 3.5 6.5C13.7 8 16 8 16 8s-2.3.2-4.5 1.5C9.4 11 8.2 13.3 8 16c-.2-2.7-1.4-5-3.5-6.5C2.3 8.2 0 8 0 8s2.3-.2 4.5-1.5C6.6 5 7.8 2.7 8 0z" />
+                </svg>
+              </span>
+
+              {/* Label + subtitle */}
+              <div className="flex flex-col min-w-0">
+                <span className="text-[13px] font-semibold leading-tight tracking-tight">Companion</span>
+                {isAlive ? (
+                  <span className="text-[10px] text-cc-success leading-tight mt-0.5 flex items-center gap-1">
+                    <span className="w-1 h-1 rounded-full bg-cc-success inline-block" />
+                    online
+                  </span>
+                ) : assistantSessionId ? (
+                  <span className="text-[10px] text-cc-muted leading-tight mt-0.5">offline</span>
+                ) : (
+                  <span className="text-[10px] text-cc-muted leading-tight mt-0.5">click to start</span>
+                )}
+              </div>
+            </button>
+          );
+        })()}
       </div>
 
       {/* Worktree archive confirmation */}
@@ -349,22 +438,32 @@ export function Sidebar() {
       <div className="p-3 border-t border-cc-border space-y-0.5">
         <button
           onClick={() => {
-            if (terminalOpen) {
-              useStore.getState().closeTerminal();
-            } else {
-              setShowTerminalPicker(true);
+            window.location.hash = "#/terminal";
+            if (window.innerWidth < 768) {
+              useStore.getState().setSidebarOpen(false);
             }
           }}
-          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-sm text-cc-muted hover:text-cc-fg hover:bg-cc-hover transition-colors cursor-pointer"
+          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-sm transition-colors cursor-pointer ${
+            isTerminalPage
+              ? "bg-cc-active text-cc-fg"
+              : "text-cc-muted hover:text-cc-fg hover:bg-cc-hover"
+          }`}
         >
           <svg viewBox="0 0 16 16" fill="currentColor" className="w-4 h-4">
             <path d="M2 3a1 1 0 011-1h10a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3zm2 1.5l3 2.5-3 2.5V4.5zM8.5 10h3v1h-3v-1z" />
           </svg>
-          <span>{terminalOpen ? "Close Terminal" : "Terminal"}</span>
+          <span>Terminal</span>
         </button>
         <button
-          onClick={() => setShowEnvManager(true)}
-          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-sm text-cc-muted hover:text-cc-fg hover:bg-cc-hover transition-colors cursor-pointer"
+          onClick={() => {
+            useStore.getState().closeTerminal();
+            window.location.hash = "#/environments";
+          }}
+          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-sm transition-colors cursor-pointer ${
+            isEnvironmentsPage
+              ? "bg-cc-active text-cc-fg"
+              : "text-cc-muted hover:text-cc-fg hover:bg-cc-hover"
+          }`}
         >
           <svg viewBox="0 0 16 16" fill="currentColor" className="w-4 h-4">
             <path d="M8 1a2 2 0 012 2v1h2a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6a2 2 0 012-2h2V3a2 2 0 012-2zm0 1.5a.5.5 0 00-.5.5v1h1V3a.5.5 0 00-.5-.5zM4 5.5a.5.5 0 00-.5.5v6a.5.5 0 00.5.5h8a.5.5 0 00.5-.5V6a.5.5 0 00-.5-.5H4z" />
@@ -372,40 +471,31 @@ export function Sidebar() {
           <span>Environments</span>
         </button>
         <button
-          onClick={toggleNotificationSound}
-          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-sm text-cc-muted hover:text-cc-fg hover:bg-cc-hover transition-colors cursor-pointer"
+          onClick={() => {
+            useStore.getState().closeTerminal();
+            window.location.hash = "#/scheduled";
+          }}
+          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-sm transition-colors cursor-pointer ${
+            isScheduledPage
+              ? "bg-cc-active text-cc-fg"
+              : "text-cc-muted hover:text-cc-fg hover:bg-cc-hover"
+          }`}
         >
-          {notificationSound ? (
-            <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-              <path d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.707.707L4.586 13H2a1 1 0 01-1-1V8a1 1 0 011-1h2.586l3.707-3.707a1 1 0 011.09-.217zM14.657 2.929a1 1 0 011.414 0A9.972 9.972 0 0119 10a9.972 9.972 0 01-2.929 7.071 1 1 0 01-1.414-1.414A7.971 7.971 0 0017 10c0-2.21-.894-4.208-2.343-5.657a1 1 0 010-1.414zm-2.829 2.828a1 1 0 011.415 0A5.983 5.983 0 0115 10a5.984 5.984 0 01-1.757 4.243 1 1 0 01-1.415-1.415A3.984 3.984 0 0013 10a3.983 3.983 0 00-1.172-2.828 1 1 0 010-1.415z" />
-            </svg>
-          ) : (
-            <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-              <path fillRule="evenodd" d="M9.383 3.076A1 1 0 0110 4v12a1 1 0 01-1.707.707L4.586 13H2a1 1 0 01-1-1V8a1 1 0 011-1h2.586l3.707-3.707a1 1 0 011.09-.217zM12.293 7.293a1 1 0 011.414 0L15 8.586l1.293-1.293a1 1 0 111.414 1.414L16.414 10l1.293 1.293a1 1 0 01-1.414 1.414L15 11.414l-1.293 1.293a1 1 0 01-1.414-1.414L13.586 10l-1.293-1.293a1 1 0 010-1.414z" clipRule="evenodd" />
-            </svg>
-          )}
-          <span>{notificationSound ? "Sound on" : "Sound off"}</span>
-        </button>
-        <button
-          onClick={toggleDarkMode}
-          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-sm text-cc-muted hover:text-cc-fg hover:bg-cc-hover transition-colors cursor-pointer"
-        >
-          {darkMode ? (
-            <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-              <path fillRule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clipRule="evenodd" />
-            </svg>
-          ) : (
-            <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
-              <path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z" />
-            </svg>
-          )}
-          <span>{darkMode ? "Light mode" : "Dark mode"}</span>
+          <svg viewBox="0 0 16 16" fill="currentColor" className="w-4 h-4">
+            <path d="M8 2a6 6 0 100 12A6 6 0 008 2zM0 8a8 8 0 1116 0A8 8 0 010 8zm9-3a1 1 0 10-2 0v3a1 1 0 00.293.707l2 2a1 1 0 001.414-1.414L9 7.586V5z" />
+          </svg>
+          <span>Scheduled</span>
         </button>
         <button
           onClick={() => {
+            useStore.getState().closeTerminal();
             window.location.hash = "#/settings";
           }}
-          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-sm text-cc-muted hover:text-cc-fg hover:bg-cc-hover transition-colors cursor-pointer"
+          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-sm transition-colors cursor-pointer ${
+            isSettingsPage
+              ? "bg-cc-active text-cc-fg"
+              : "text-cc-muted hover:text-cc-fg hover:bg-cc-hover"
+          }`}
         >
           <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
             <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.53 1.53 0 01-2.29.95c-1.35-.8-2.92.77-2.12 2.12.54.9.07 2.04-.95 2.29-1.56.38-1.56 2.6 0 2.98 1.02.25 1.49 1.39.95 2.29-.8 1.35.77 2.92 2.12 2.12.9-.54 2.04-.07 2.29.95.38 1.56 2.6 1.56 2.98 0 .25-1.02 1.39-1.49 2.29-.95 1.35.8 2.92-.77 2.12-2.12-.54-.9-.07-2.04.95-2.29 1.56-.38 1.56-2.6 0-2.98-1.02-.25-1.49-1.39-.95-2.29.8-1.35-.77-2.92-2.12-2.12-.9.54-2.04.07-2.29-.95zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
@@ -413,23 +503,6 @@ export function Sidebar() {
           <span>Settings</span>
         </button>
       </div>
-
-      {/* Environment manager modal */}
-      {showEnvManager && (
-        <EnvManager onClose={() => setShowEnvManager(false)} />
-      )}
-
-      {/* Terminal folder picker */}
-      {showTerminalPicker && (
-        <FolderPicker
-          initialPath=""
-          onSelect={(path) => {
-            useStore.getState().openTerminal(path);
-            setShowTerminalPicker(false);
-          }}
-          onClose={() => setShowTerminalPicker(false)}
-        />
-      )}
     </aside>
   );
 }

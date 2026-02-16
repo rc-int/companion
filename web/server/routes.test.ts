@@ -13,6 +13,11 @@ vi.mock("node:child_process", () => ({
   execSync: vi.fn(() => ""),
 }));
 
+const mockResolveBinary = vi.hoisted(() => vi.fn((_name: string) => null as string | null));
+vi.mock("./path-resolver.js", () => ({
+  resolveBinary: mockResolveBinary,
+}));
+
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   return {
@@ -57,30 +62,32 @@ vi.mock("./settings-manager.js", () => ({
 }));
 
 const mockGetUsageLimits = vi.hoisted(() => vi.fn());
+const mockUpdateCheckerState = vi.hoisted(() => ({
+  wilco: { current: "0.1.0", latest: null as string | null },
+  companion: { current: "0.29.0", latest: null as string | null },
+  lastChecked: 0,
+  checking: false,
+  updateInProgress: false,
+}));
+const mockCheckForUpdate = vi.hoisted(() => vi.fn(async () => {}));
+const mockIsUpdateAvailable = vi.hoisted(() => vi.fn(() => false));
+const mockSetUpdateInProgress = vi.hoisted(() => vi.fn());
+
 vi.mock("./usage-limits.js", () => ({
   getUsageLimits: mockGetUsageLimits,
 }));
 
+const mockIsNewerVersion = vi.hoisted(() => vi.fn(() => false));
 vi.mock("./update-checker.js", () => ({
   getUpdateState: vi.fn(() => ({
-    wilco: { current: "0.1.0", latest: null },
-    companion: { current: "0.29.0", latest: null },
-    lastChecked: 0,
-    checking: false,
-    updateInProgress: false,
+    ...mockUpdateCheckerState,
+    wilco: { ...mockUpdateCheckerState.wilco },
+    companion: { ...mockUpdateCheckerState.companion },
   })),
-  checkForUpdate: vi.fn(async () => {}),
-  isUpdateAvailable: vi.fn(() => false),
-  isNewerVersion: vi.fn((a: string, b: string) => {
-    const pa = a.replace(/^v/, "").split(".").map(Number);
-    const pb = b.replace(/^v/, "").split(".").map(Number);
-    for (let i = 0; i < 3; i++) {
-      if ((pa[i] || 0) > (pb[i] || 0)) return true;
-      if ((pa[i] || 0) < (pb[i] || 0)) return false;
-    }
-    return false;
-  }),
-  setUpdateInProgress: vi.fn(),
+  checkForUpdate: mockCheckForUpdate,
+  isUpdateAvailable: mockIsUpdateAvailable,
+  isNewerVersion: mockIsNewerVersion,
+  setUpdateInProgress: mockSetUpdateInProgress,
 }));
 
 import { Hono } from "hono";
@@ -145,6 +152,12 @@ let tracker: ReturnType<typeof createMockTracker>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockUpdateCheckerState.currentVersion = "0.22.1";
+  mockUpdateCheckerState.latestVersion = null;
+  mockUpdateCheckerState.lastChecked = 0;
+  mockUpdateCheckerState.isServiceMode = false;
+  mockUpdateCheckerState.checking = false;
+  mockUpdateCheckerState.updateInProgress = false;
   launcher = createMockLauncher();
   bridge = createMockBridge();
   sessionStore = createMockStore();
@@ -322,7 +335,7 @@ describe("POST /api/sessions/create", () => {
     expect(launcher.launch).not.toHaveBeenCalled();
   });
 
-  it("returns 500 and does not launch when pull fails before create", async () => {
+  it("proceeds with session creation when pull fails (non-fatal)", async () => {
     vi.mocked(gitUtils.getRepoInfo).mockReturnValue({
       repoRoot: "/repo",
       repoName: "my-repo",
@@ -332,7 +345,7 @@ describe("POST /api/sessions/create", () => {
     });
     vi.mocked(gitUtils.gitPull).mockReturnValueOnce({
       success: false,
-      output: "non-fast-forward",
+      output: "no tracking information",
     });
 
     const res = await app.request("/api/sessions/create", {
@@ -341,12 +354,9 @@ describe("POST /api/sessions/create", () => {
       body: JSON.stringify({ cwd: "/repo", branch: "main" }),
     });
 
-    expect(res.status).toBe(500);
-    const json = await res.json();
-    expect(json).toEqual({
-      error: "git pull failed before session create: non-fast-forward",
-    });
-    expect(launcher.launch).not.toHaveBeenCalled();
+    // Pull failure is non-fatal — session should still be created
+    expect(res.status).toBe(200);
+    expect(launcher.launch).toHaveBeenCalled();
   });
 
   it("returns 500 when launch throws an error", async () => {
@@ -997,6 +1007,39 @@ describe("PATCH /api/sessions/:id/name", () => {
   });
 });
 
+// ─── Update checking ────────────────────────────────────────────────────────
+
+describe("GET /api/update-check", () => {
+  it("triggers a refresh when never checked", async () => {
+    mockUpdateCheckerState.lastChecked = 0;
+
+    const res = await app.request("/api/update-check", { method: "GET" });
+
+    expect(res.status).toBe(200);
+    expect(mockCheckForUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("does not trigger a refresh when the previous check is fresh", async () => {
+    mockUpdateCheckerState.lastChecked = Date.now();
+
+    const res = await app.request("/api/update-check", { method: "GET" });
+
+    expect(res.status).toBe(200);
+    expect(mockCheckForUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/update-check", () => {
+  it("always forces a refresh", async () => {
+    mockUpdateCheckerState.lastChecked = Date.now();
+
+    const res = await app.request("/api/update-check", { method: "POST" });
+
+    expect(res.status).toBe(200);
+    expect(mockCheckForUpdate).toHaveBeenCalledOnce();
+  });
+});
+
 // ─── Filesystem ──────────────────────────────────────────────────────────────
 
 describe("GET /api/fs/home", () => {
@@ -1083,6 +1126,7 @@ describe("GET /api/fs/diff", () => {
   });
 
   it("returns unified diff for a file", async () => {
+    // Validates that /api/fs/diff uses the repository default branch as base (origin/main here).
     const diffOutput = `diff --git a/file.ts b/file.ts
 --- a/file.ts
 +++ b/file.ts
@@ -1094,7 +1138,8 @@ describe("GET /api/fs/diff", () => {
     vi.mocked(execSync)
       .mockReturnValueOnce("/repo\n") // rev-parse --show-toplevel
       .mockReturnValueOnce("file.ts\n") // ls-files --full-name
-      .mockReturnValueOnce(diffOutput); // git diff HEAD
+      .mockReturnValueOnce("refs/remotes/origin/main\n") // symbolic-ref refs/remotes/origin/HEAD
+      .mockReturnValueOnce(diffOutput); // git diff origin/main
 
     const res = await app.request("/api/fs/diff?path=/repo/file.ts", { method: "GET" });
 
@@ -1103,12 +1148,13 @@ describe("GET /api/fs/diff", () => {
     expect(json.diff).toBe(diffOutput);
     expect(json.path).toContain("file.ts");
     expect(vi.mocked(execSync)).toHaveBeenCalledWith(
-      expect.stringContaining("git diff HEAD"),
+      expect.stringContaining("git diff origin/main"),
       expect.objectContaining({ encoding: "utf-8", timeout: 5000 }),
     );
   });
 
   it("returns no-index diff for untracked files", async () => {
+    // Untracked files have no base-branch diff content, so API must fallback to a full-file no-index diff.
     const untrackedDiff = `diff --git a/new.txt b/new.txt
 new file mode 100644
 index 0000000..e69de29
@@ -1120,7 +1166,8 @@ index 0000000..e69de29
     vi.mocked(execSync)
       .mockReturnValueOnce("/repo\n") // rev-parse --show-toplevel
       .mockReturnValueOnce("new.txt\n") // ls-files --full-name
-      .mockReturnValueOnce("") // git diff HEAD -> empty for untracked
+      .mockReturnValueOnce("refs/remotes/origin/main\n") // symbolic-ref refs/remotes/origin/HEAD
+      .mockReturnValueOnce("") // git diff origin/main -> empty for untracked
       .mockReturnValueOnce("new.txt\n") // ls-files --others --exclude-standard
       .mockImplementationOnce(() => {
         const err = new Error("diff exits with 1 for differences") as Error & { stdout: string };
@@ -1135,6 +1182,36 @@ index 0000000..e69de29
     expect(json.diff).toContain("new file mode");
     expect(vi.mocked(execSync)).toHaveBeenCalledWith(
       expect.stringContaining("git diff --no-index -- /dev/null"),
+      expect.objectContaining({ encoding: "utf-8", timeout: 5000 }),
+    );
+  });
+
+  it("falls back to local default branch when origin HEAD is unavailable", async () => {
+    // Ensures fallback chain works when symbolic-ref fails (e.g. no origin/HEAD): use local fallback branch.
+    const diffOutput = `diff --git a/file.ts b/file.ts
+--- a/file.ts
++++ b/file.ts
+@@ -1,2 +1,3 @@
+ line1
++added`;
+    vi.mocked(execSync)
+      .mockReturnValueOnce("/repo\n") // rev-parse --show-toplevel
+      .mockReturnValueOnce("file.ts\n") // ls-files --full-name
+      .mockImplementationOnce(() => {
+        const err = new Error("no symbol ref") as Error & { stdout: string };
+        err.stdout = "error: ref refs/remotes/origin/HEAD is not a symbolic ref";
+        throw err;
+      }) // symbolic-ref refs/remotes/origin/HEAD unavailable
+      .mockReturnValueOnce("main\n") // branch --list fallback
+      .mockReturnValueOnce(diffOutput); // git diff main
+
+    const res = await app.request("/api/fs/diff?path=/repo/file.ts", { method: "GET" });
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.diff).toBe(diffOutput);
+    expect(vi.mocked(execSync)).toHaveBeenCalledWith(
+      expect.stringContaining("git diff main"),
       expect.objectContaining({ encoding: "utf-8", timeout: 5000 }),
     );
   });
@@ -1157,8 +1234,8 @@ index 0000000..e69de29
 
 describe("GET /api/backends", () => {
   it("returns both backends with availability status", async () => {
-    // First call: `which claude` succeeds, second: `which codex` succeeds
-    vi.mocked(execSync)
+    // resolveBinary returns a path for both binaries
+    mockResolveBinary
       .mockReturnValueOnce("/usr/bin/claude")
       .mockReturnValueOnce("/usr/bin/codex");
 
@@ -1172,10 +1249,11 @@ describe("GET /api/backends", () => {
     ]);
   });
 
-  it("marks backends as unavailable when CLI is not found", async () => {
-    vi.mocked(execSync)
-      .mockImplementationOnce(() => { throw new Error("not found"); })
-      .mockImplementationOnce(() => { throw new Error("not found"); });
+  it("marks backends as unavailable when binary is not found", async () => {
+    // resolveBinary returns null for both
+    mockResolveBinary
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce(null);
 
     const res = await app.request("/api/backends", { method: "GET" });
 
@@ -1188,9 +1266,9 @@ describe("GET /api/backends", () => {
   });
 
   it("handles mixed availability", async () => {
-    vi.mocked(execSync)
+    mockResolveBinary
       .mockReturnValueOnce("/usr/bin/claude") // claude found
-      .mockImplementationOnce(() => { throw new Error("not found"); }); // codex not found
+      .mockReturnValueOnce(null); // codex not found
 
     const res = await app.request("/api/backends", { method: "GET" });
 

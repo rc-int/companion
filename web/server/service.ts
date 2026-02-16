@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { DEFAULT_PORT_PROD } from "./constants.js";
+import { getServicePath } from "./path-resolver.js";
 
 // ─── Shared Constants ───────────────────────────────────────────────────────────
 
@@ -55,6 +56,7 @@ function isLinux(): boolean {
 interface PlistOptions {
   binPath: string;
   port?: number;
+  path?: string;
 }
 
 export function generatePlist(opts: PlistOptions): string {
@@ -72,6 +74,7 @@ export function generatePlist(opts: PlistOptions): string {
     <array>
         <string>${opts.binPath}</string>
         <string>start</string>
+        <string>--foreground</string>
     </array>
 
     <key>WorkingDirectory</key>
@@ -101,7 +104,7 @@ export function generatePlist(opts: PlistOptions): string {
         <key>HOME</key>
         <string>${home}</string>
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${home}/.bun/bin</string>
+        <string>${opts.path || getServicePath()}</string>
     </dict>
 
     <key>ProcessType</key>
@@ -118,6 +121,7 @@ export function generatePlist(opts: PlistOptions): string {
 interface UnitOptions {
   binPath: string;
   port?: number;
+  path?: string;
 }
 
 export function generateSystemdUnit(opts: UnitOptions): string {
@@ -130,16 +134,17 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${opts.binPath} start
+ExecStart=${opts.binPath} start --foreground
 WorkingDirectory=${home}
-Restart=on-failure
+Restart=always
 RestartSec=5
+SuccessExitStatus=42
 StandardOutput=append:${STDOUT_LOG}
 StandardError=append:${STDERR_LOG}
 Environment=NODE_ENV=production
 Environment=PORT=${port}
 Environment=HOME=${home}
-Environment=PATH=/usr/local/bin:/usr/bin:/bin:${home}/.bun/bin:${home}/.local/bin
+Environment=PATH=${opts.path || getServicePath()}
 
 [Install]
 WantedBy=default.target
@@ -209,9 +214,14 @@ function isSystemdUnitInstalled(): boolean {
 }
 
 function systemctlUser(cmd: string): string {
+  const uid = typeof process.getuid === "function" ? process.getuid() : 1000;
   return execSync(`systemctl --user ${cmd}`, {
     encoding: "utf-8",
     stdio: ["pipe", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || `/run/user/${uid}`,
+    },
   });
 }
 
@@ -241,8 +251,9 @@ async function installDarwin(opts?: { port?: number }): Promise<void> {
   // Create log directory
   mkdirSync(LOG_DIR, { recursive: true });
 
-  // Generate and write plist
-  const plist = generatePlist({ binPath, port });
+  // Generate and write plist (capture user's shell PATH at install time)
+  const path = getServicePath();
+  const plist = generatePlist({ binPath, port, path });
   mkdirSync(PLIST_DIR, { recursive: true });
   writeFileSync(PLIST_PATH, plist, "utf-8");
 
@@ -280,8 +291,9 @@ async function installLinux(opts?: { port?: number }): Promise<void> {
   // Create log directory
   mkdirSync(LOG_DIR, { recursive: true });
 
-  // Generate and write systemd unit
-  const unit = generateSystemdUnit({ binPath, port });
+  // Generate and write systemd unit (capture user's shell PATH at install time)
+  const path = getServicePath();
+  const unit = generateSystemdUnit({ binPath, port, path });
   mkdirSync(SYSTEMD_DIR, { recursive: true });
   writeFileSync(UNIT_PATH, unit, "utf-8");
 
@@ -295,6 +307,16 @@ async function installLinux(opts?: { port?: number }): Promise<void> {
     // Clean up the unit file on failure
     try { unlinkSync(UNIT_PATH); } catch { /* ok */ }
     process.exit(1);
+  }
+
+  // Enable linger so user services survive logout
+  try {
+    execSync("loginctl enable-linger", { stdio: ["pipe", "pipe", "pipe"] });
+  } catch {
+    console.warn(
+      "Warning: Could not enable linger. The service may stop when you log out.",
+    );
+    console.warn("  sudo loginctl enable-linger $(whoami)");
   }
 
   console.log("The Companion has been installed as a background service.");
@@ -362,6 +384,71 @@ async function uninstallLinux(): Promise<void> {
 
 // ─── Stop / Restart ────────────────────────────────────────────────────────────
 
+export async function start(): Promise<void> {
+  ensureSupportedPlatform();
+
+  if (isDarwin()) {
+    return startDarwin();
+  }
+  return startLinux();
+}
+
+async function startDarwin(): Promise<void> {
+  const installedService = getInstalledLaunchdService();
+  if (!installedService) {
+    console.log("The Companion is not installed as a service.");
+    console.log("Run 'the-companion install' first.");
+    return;
+  }
+
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  const domain = uid !== undefined ? `gui/${uid}` : "gui";
+  const domainTarget = uid !== undefined
+    ? `gui/${uid}/${installedService.label}`
+    : installedService.label;
+
+  try {
+    execSync(`launchctl kickstart -k "${domainTarget}"`, { stdio: "pipe" });
+  } catch {
+    try {
+      execSync(`launchctl bootstrap "${domain}" "${installedService.plistPath}"`, { stdio: "pipe" });
+    } catch {
+      try {
+        execSync(`launchctl load -w "${installedService.plistPath}"`, { stdio: "pipe" });
+      } catch (err: unknown) {
+        console.error("Failed to start the service with launchctl:");
+        console.error(err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
+    }
+  }
+
+  console.log("The Companion service has been started.");
+}
+
+async function startLinux(): Promise<void> {
+  if (!isSystemdUnitInstalled()) {
+    console.log("Service not yet installed. Installing now...");
+    await installLinux();
+    return; // installLinux uses enable --now which starts the service
+  }
+
+  // Ensure the installed unit file matches the latest template (e.g.
+  // SuccessExitStatus=42, Restart=always) so that stale definitions from
+  // older versions don't cause restart loops after an auto-update.
+  refreshServiceDefinition();
+
+  try {
+    systemctlUser(`start ${UNIT_NAME}`);
+  } catch (err: unknown) {
+    console.error("Failed to start the service with systemctl:");
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+
+  console.log("The Companion service has been started.");
+}
+
 export async function stop(): Promise<void> {
   ensureSupportedPlatform();
 
@@ -379,9 +466,15 @@ async function stopDarwin(): Promise<void> {
   }
 
   try {
-    execSync(`launchctl stop "${installedService.label}"`, { stdio: "pipe" });
+    const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+    const domainTarget = uid !== undefined
+      ? `gui/${uid}/${installedService.label}`
+      : installedService.label;
+    // `stop` is not enough with KeepAlive=true: launchd can immediately restart it.
+    // Booting out unloads the job from launchd while keeping the plist installed.
+    execSync(`launchctl bootout "${domainTarget}"`, { stdio: "pipe" });
   } catch {
-    // If stop is unavailable or service is unloaded, best-effort unload.
+    // Fallback for environments where bootout/domain targeting is unavailable.
     unloadLaunchdService(installedService.plistPath);
   }
 
@@ -451,6 +544,9 @@ async function restartLinux(): Promise<void> {
     return;
   }
 
+  // Keep the unit file in sync with the latest template before restarting.
+  refreshServiceDefinition();
+
   try {
     systemctlUser(`restart ${UNIT_NAME}`);
   } catch (err: unknown) {
@@ -501,6 +597,48 @@ export function isRunningAsService(): boolean {
   }
 
   return false;
+}
+
+/**
+ * Re-write the service definition (plist or systemd unit) using the current
+ * binary path and the latest template, preserving the user's custom port.
+ * On Linux this also calls daemon-reload so systemd picks up the changes.
+ */
+export function refreshServiceDefinition(): void {
+  if (isDarwin()) {
+    const installedService = getInstalledLaunchdService();
+    if (!installedService) return;
+
+    let port = DEFAULT_PORT_PROD;
+    try {
+      const content = readFileSync(installedService.plistPath, "utf-8");
+      const portMatch = content.match(/<key>PORT<\/key>\s*<string>(\d+)<\/string>/);
+      if (portMatch) port = Number(portMatch[1]);
+    } catch { /* use default */ }
+
+    const binPath = resolveBinPath();
+    const path = getServicePath();
+    const plist = generatePlist({ binPath, port, path });
+    writeFileSync(installedService.plistPath, plist, "utf-8");
+  } else if (isLinux()) {
+    if (!isSystemdUnitInstalled()) return;
+
+    let port = DEFAULT_PORT_PROD;
+    try {
+      const content = readFileSync(UNIT_PATH, "utf-8");
+      const portMatch = content.match(/Environment=PORT=(\d+)/);
+      if (portMatch) port = Number(portMatch[1]);
+    } catch { /* use default */ }
+
+    const binPath = resolveBinPath();
+    const path = getServicePath();
+    const unit = generateSystemdUnit({ binPath, port, path });
+    writeFileSync(UNIT_PATH, unit, "utf-8");
+
+    try {
+      systemctlUser("daemon-reload");
+    } catch { /* best effort */ }
+  }
 }
 
 export async function status(): Promise<ServiceStatus> {

@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useStore } from "../store.js";
 import { api, type UsageLimits, type GitHubPRInfo } from "../api.js";
 import type { TaskItem } from "../types.js";
+import { McpSection } from "./McpPanel.js";
 
 const EMPTY_TASKS: TaskItem[] = [];
 const POLL_INTERVAL = 60_000;
@@ -149,6 +150,150 @@ function UsageLimitsSection({ sessionId }: { sessionId: string }) {
               />
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Codex Rate Limits ───────────────────────────────────────────────────────
+
+function formatCodexResetTime(resetsAtMs: number): string {
+  const diffMs = resetsAtMs - Date.now();
+  if (diffMs <= 0) return "now";
+  const days = Math.floor(diffMs / 86_400_000);
+  const hours = Math.floor((diffMs % 86_400_000) / 3_600_000);
+  const minutes = Math.floor((diffMs % 3_600_000) / 60_000);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h${minutes}m`;
+  return `${minutes}m`;
+}
+
+function formatWindowDuration(mins: number): string {
+  if (mins >= 1440) return `${Math.round(mins / 1440)}d`;
+  if (mins >= 60) return `${Math.round(mins / 60)}h`;
+  return `${mins}m`;
+}
+
+function CodexRateLimitsSection({ sessionId }: { sessionId: string }) {
+  const rateLimits = useStore((s) => s.sessions.get(sessionId)?.codex_rate_limits);
+
+  // Tick for countdown refresh
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!rateLimits) return;
+    const id = setInterval(() => setTick((t) => t + 1), 30_000);
+    return () => clearInterval(id);
+  }, [rateLimits]);
+
+  if (!rateLimits) return null;
+  const { primary, secondary } = rateLimits;
+  if (!primary && !secondary) return null;
+
+  return (
+    <div className="shrink-0 px-4 py-3 border-b border-cc-border space-y-2.5">
+      {primary && (
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] text-cc-muted uppercase tracking-wider">
+              {formatWindowDuration(primary.windowDurationMins)} Limit
+            </span>
+            <span className="text-[11px] text-cc-muted tabular-nums">
+              {Math.round(primary.usedPercent)}%
+              {primary.resetsAt > 0 && (
+                <span className="ml-1">
+                  ({formatCodexResetTime(primary.resetsAt)})
+                </span>
+              )}
+            </span>
+          </div>
+          <div className="w-full h-1.5 rounded-full bg-cc-hover overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${barColor(primary.usedPercent)}`}
+              style={{ width: `${Math.min(primary.usedPercent, 100)}%` }}
+            />
+          </div>
+        </div>
+      )}
+      {secondary && (
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] text-cc-muted uppercase tracking-wider">
+              {formatWindowDuration(secondary.windowDurationMins)} Limit
+            </span>
+            <span className="text-[11px] text-cc-muted tabular-nums">
+              {Math.round(secondary.usedPercent)}%
+              {secondary.resetsAt > 0 && (
+                <span className="ml-1">
+                  ({formatCodexResetTime(secondary.resetsAt)})
+                </span>
+              )}
+            </span>
+          </div>
+          <div className="w-full h-1.5 rounded-full bg-cc-hover overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${barColor(secondary.usedPercent)}`}
+              style={{ width: `${Math.min(secondary.usedPercent, 100)}%` }}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Codex Token Details ─────────────────────────────────────────────────────
+
+function formatTokenCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+function CodexTokenDetailsSection({ sessionId }: { sessionId: string }) {
+  const details = useStore((s) => s.sessions.get(sessionId)?.codex_token_details);
+  // Use the server-computed context percentage (input+output / contextWindow, capped 0-100)
+  const contextPct = useStore((s) => s.sessions.get(sessionId)?.context_used_percent ?? 0);
+
+  if (!details) return null;
+
+  return (
+    <div className="shrink-0 px-4 py-3 border-b border-cc-border space-y-2">
+      <span className="text-[11px] text-cc-muted uppercase tracking-wider">Tokens</span>
+      <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] text-cc-muted">Input</span>
+          <span className="text-[11px] text-cc-fg tabular-nums font-medium">{formatTokenCount(details.inputTokens)}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] text-cc-muted">Output</span>
+          <span className="text-[11px] text-cc-fg tabular-nums font-medium">{formatTokenCount(details.outputTokens)}</span>
+        </div>
+        {details.cachedInputTokens > 0 && (
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] text-cc-muted">Cached</span>
+            <span className="text-[11px] text-cc-fg tabular-nums font-medium">{formatTokenCount(details.cachedInputTokens)}</span>
+          </div>
+        )}
+        {details.reasoningOutputTokens > 0 && (
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] text-cc-muted">Reasoning</span>
+            <span className="text-[11px] text-cc-fg tabular-nums font-medium">{formatTokenCount(details.reasoningOutputTokens)}</span>
+          </div>
+        )}
+      </div>
+      {details.modelContextWindow > 0 && (
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] text-cc-muted">Context</span>
+            <span className="text-[11px] text-cc-muted tabular-nums">{contextPct}%</span>
+          </div>
+          <div className="w-full h-1.5 rounded-full bg-cc-hover overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${barColor(contextPct)}`}
+              style={{ width: `${Math.min(contextPct, 100)}%` }}
+            />
+          </div>
         </div>
       )}
     </div>
@@ -303,12 +448,15 @@ function GitHubPRSection({ sessionId }: { sessionId: string }) {
 
 // ─── Task Panel ──────────────────────────────────────────────────────────────
 
+export { CodexRateLimitsSection, CodexTokenDetailsSection };
+
 export function TaskPanel({ sessionId }: { sessionId: string }) {
   const tasks = useStore((s) => s.sessionTasks.get(sessionId) || EMPTY_TASKS);
   const session = useStore((s) => s.sessions.get(sessionId));
   const sdkBackendType = useStore((s) => s.sdkSessions.find((x) => x.sessionId === sessionId)?.backendType);
   const taskPanelOpen = useStore((s) => s.taskPanelOpen);
   const setTaskPanelOpen = useStore((s) => s.setTaskPanelOpen);
+  const isAssistant = useStore((s) => s.assistantSessionId === sessionId);
 
   if (!taskPanelOpen) return null;
 
@@ -317,7 +465,7 @@ export function TaskPanel({ sessionId }: { sessionId: string }) {
   const showTasks = !!session && !isCodex;
 
   return (
-    <aside className="w-[280px] h-full flex flex-col bg-cc-card border-l border-cc-border">
+    <aside className="w-[280px] h-full flex flex-col overflow-hidden bg-cc-card border-l border-cc-border">
       {/* Header */}
       <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-cc-border">
         <span className="text-sm font-semibold text-cc-fg tracking-tight">
@@ -339,38 +487,50 @@ export function TaskPanel({ sessionId }: { sessionId: string }) {
         </button>
       </div>
 
-      {/* Usage limits */}
-      <UsageLimitsSection sessionId={sessionId} />
+      <div data-testid="task-panel-content" className="min-h-0 flex-1 overflow-y-auto">
+        {/* Usage limits — Claude Code uses REST-polled limits, Codex uses streamed rate limits */}
+        {isCodex ? (
+          <>
+            <CodexRateLimitsSection sessionId={sessionId} />
+            <CodexTokenDetailsSection sessionId={sessionId} />
+          </>
+        ) : (
+          <UsageLimitsSection sessionId={sessionId} />
+        )}
 
-      {/* GitHub PR status */}
-      <GitHubPRSection sessionId={sessionId} />
+        {/* GitHub PR status — hidden for assistant (no git context) */}
+        {!isAssistant && <GitHubPRSection sessionId={sessionId} />}
 
-      {showTasks && (
-        <>
-          {/* Task section header */}
-          <div className="shrink-0 px-4 py-2.5 border-b border-cc-border flex items-center justify-between">
-            <span className="text-[12px] font-semibold text-cc-fg">Tasks</span>
-            {tasks.length > 0 && (
-              <span className="text-[11px] text-cc-muted tabular-nums">
-                {completedCount}/{tasks.length}
-              </span>
-            )}
-          </div>
+        {/* MCP servers */}
+        <McpSection sessionId={sessionId} />
 
-          {/* Task list */}
-          <div className="flex-1 overflow-y-auto px-3 py-2">
-            {tasks.length === 0 ? (
-              <p className="text-xs text-cc-muted text-center py-8">No tasks yet</p>
-            ) : (
-              <div className="space-y-0.5">
-                {tasks.map((task) => (
-                  <TaskRow key={task.id} task={task} />
-                ))}
-              </div>
-            )}
-          </div>
-        </>
-      )}
+        {showTasks && (
+          <>
+            {/* Task section header */}
+            <div className="px-4 py-2.5 border-b border-cc-border flex items-center justify-between">
+              <span className="text-[12px] font-semibold text-cc-fg">Tasks</span>
+              {tasks.length > 0 && (
+                <span className="text-[11px] text-cc-muted tabular-nums">
+                  {completedCount}/{tasks.length}
+                </span>
+              )}
+            </div>
+
+            {/* Task list */}
+            <div className="px-3 py-2">
+              {tasks.length === 0 ? (
+                <p className="text-xs text-cc-muted text-center py-8">No tasks yet</p>
+              ) : (
+                <div className="space-y-0.5">
+                  {tasks.map((task) => (
+                    <TaskRow key={task.id} task={task} />
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
     </aside>
   );
 }

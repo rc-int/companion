@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { SessionState, PermissionRequest, ChatMessage, SdkSessionInfo, TaskItem } from "./types.js";
+import type { SessionState, PermissionRequest, ChatMessage, SdkSessionInfo, TaskItem, McpServerDetail } from "./types.js";
 import type { UpdateInfo, PRStatusResponse } from "./api.js";
 
 interface AppState {
@@ -7,6 +7,7 @@ interface AppState {
   sessions: Map<string, SessionState>;
   sdkSessions: SdkSessionInfo[];
   currentSessionId: string | null;
+  assistantSessionId: string | null;
 
   // Messages per session
   messages: Map<string, ChatMessage[]>;
@@ -45,6 +46,12 @@ interface AppState {
   // PR status per session (pushed by server via WebSocket)
   prStatus: Map<string, PRStatusResponse>;
 
+  // MCP servers per session
+  mcpServers: Map<string, McpServerDetail[]>;
+
+  // Tool progress (session → tool_use_id → progress info)
+  toolProgress: Map<string, Map<string, { toolName: string; elapsedSeconds: number }>>;
+
   // Sidebar project grouping
   collapsedProjects: Set<string>;
 
@@ -55,6 +62,7 @@ interface AppState {
   // UI
   darkMode: boolean;
   notificationSound: boolean;
+  notificationDesktop: boolean;
   sidebarOpen: boolean;
   taskPanelOpen: boolean;
   homeResetKey: number;
@@ -66,12 +74,15 @@ interface AppState {
   toggleDarkMode: () => void;
   setNotificationSound: (v: boolean) => void;
   toggleNotificationSound: () => void;
+  setNotificationDesktop: (v: boolean) => void;
+  toggleNotificationDesktop: () => void;
   setSidebarOpen: (v: boolean) => void;
   setTaskPanelOpen: (open: boolean) => void;
   newSession: () => void;
 
   // Session actions
   setCurrentSession: (id: string | null) => void;
+  setAssistantSessionId: (id: string | null) => void;
   addSession: (session: SessionState) => void;
   updateSession: (sessionId: string, updates: Partial<SessionState>) => void;
   removeSession: (sessionId: string) => void;
@@ -104,6 +115,13 @@ interface AppState {
 
   // PR status action
   setPRStatus: (sessionId: string, status: PRStatusResponse) => void;
+
+  // MCP actions
+  setMcpServers: (sessionId: string, servers: McpServerDetail[]) => void;
+
+  // Tool progress actions
+  setToolProgress: (sessionId: string, toolUseId: string, data: { toolName: string; elapsedSeconds: number }) => void;
+  clearToolProgress: (sessionId: string, toolUseId?: string) => void;
 
   // Sidebar project grouping actions
   toggleProjectCollapse: (projectKey: string) => void;
@@ -167,9 +185,21 @@ function getInitialNotificationSound(): boolean {
   return true;
 }
 
+function getInitialNotificationDesktop(): boolean {
+  if (typeof window === "undefined") return false;
+  const stored = localStorage.getItem("cc-notification-desktop");
+  if (stored !== null) return stored === "true";
+  return false;
+}
+
 function getInitialDismissedVersion(): string | null {
   if (typeof window === "undefined") return null;
   return localStorage.getItem("cc-update-dismissed") || null;
+}
+
+function getInitialAssistantSessionId(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem("cc-assistant-session-id") || null;
 }
 
 function getInitialCollapsedProjects(): Set<string> {
@@ -185,6 +215,7 @@ export const useStore = create<AppState>((set) => ({
   sessions: new Map(),
   sdkSessions: [],
   currentSessionId: getInitialSessionId(),
+  assistantSessionId: getInitialAssistantSessionId(),
   messages: new Map(),
   streaming: new Map(),
   streamingStartedAt: new Map(),
@@ -199,11 +230,14 @@ export const useStore = create<AppState>((set) => ({
   sessionNames: getInitialSessionNames(),
   recentlyRenamed: new Set(),
   prStatus: new Map(),
+  mcpServers: new Map(),
+  toolProgress: new Map(),
   collapsedProjects: getInitialCollapsedProjects(),
   updateInfo: null,
   updateDismissedVersion: getInitialDismissedVersion(),
   darkMode: getInitialDarkMode(),
   notificationSound: getInitialNotificationSound(),
+  notificationDesktop: getInitialNotificationDesktop(),
   sidebarOpen: typeof window !== "undefined" ? window.innerWidth >= 768 : true,
   taskPanelOpen: typeof window !== "undefined" ? window.innerWidth >= 1024 : false,
   homeResetKey: 0,
@@ -233,6 +267,16 @@ export const useStore = create<AppState>((set) => ({
       localStorage.setItem("cc-notification-sound", String(next));
       return { notificationSound: next };
     }),
+  setNotificationDesktop: (v) => {
+    localStorage.setItem("cc-notification-desktop", String(v));
+    set({ notificationDesktop: v });
+  },
+  toggleNotificationDesktop: () =>
+    set((s) => {
+      const next = !s.notificationDesktop;
+      localStorage.setItem("cc-notification-desktop", String(next));
+      return { notificationDesktop: next };
+    }),
   setSidebarOpen: (v) => set({ sidebarOpen: v }),
   setTaskPanelOpen: (open) => set({ taskPanelOpen: open }),
   newSession: () => {
@@ -247,6 +291,15 @@ export const useStore = create<AppState>((set) => ({
       localStorage.removeItem("cc-current-session");
     }
     set({ currentSessionId: id });
+  },
+
+  setAssistantSessionId: (id) => {
+    if (id) {
+      localStorage.setItem("cc-assistant-session-id", id);
+    } else {
+      localStorage.removeItem("cc-assistant-session-id");
+    }
+    set({ assistantSessionId: id });
   },
 
   addSession: (session) =>
@@ -298,6 +351,10 @@ export const useStore = create<AppState>((set) => ({
       recentlyRenamed.delete(sessionId);
       const diffPanelSelectedFile = new Map(s.diffPanelSelectedFile);
       diffPanelSelectedFile.delete(sessionId);
+      const mcpServers = new Map(s.mcpServers);
+      mcpServers.delete(sessionId);
+      const toolProgress = new Map(s.toolProgress);
+      toolProgress.delete(sessionId);
       const prStatus = new Map(s.prStatus);
       prStatus.delete(sessionId);
       localStorage.setItem("cc-session-names", JSON.stringify(Array.from(sessionNames.entries())));
@@ -320,6 +377,8 @@ export const useStore = create<AppState>((set) => ({
         sessionNames,
         recentlyRenamed,
         diffPanelSelectedFile,
+        mcpServers,
+        toolProgress,
         prStatus,
         sdkSessions: s.sdkSessions.filter((sdk) => sdk.sessionId !== sessionId),
         currentSessionId: s.currentSessionId === sessionId ? null : s.currentSessionId,
@@ -480,6 +539,38 @@ export const useStore = create<AppState>((set) => ({
       return { prStatus };
     }),
 
+  setMcpServers: (sessionId, servers) =>
+    set((s) => {
+      const mcpServers = new Map(s.mcpServers);
+      mcpServers.set(sessionId, servers);
+      return { mcpServers };
+    }),
+
+  setToolProgress: (sessionId, toolUseId, data) =>
+    set((s) => {
+      const toolProgress = new Map(s.toolProgress);
+      const sessionProgress = new Map(toolProgress.get(sessionId) || []);
+      sessionProgress.set(toolUseId, data);
+      toolProgress.set(sessionId, sessionProgress);
+      return { toolProgress };
+    }),
+
+  clearToolProgress: (sessionId, toolUseId) =>
+    set((s) => {
+      const toolProgress = new Map(s.toolProgress);
+      if (toolUseId) {
+        const sessionProgress = toolProgress.get(sessionId);
+        if (sessionProgress) {
+          const updated = new Map(sessionProgress);
+          updated.delete(toolUseId);
+          toolProgress.set(sessionId, updated);
+        }
+      } else {
+        toolProgress.delete(sessionId);
+      }
+      return { toolProgress };
+    }),
+
   toggleProjectCollapse: (projectKey) =>
     set((s) => {
       const collapsedProjects = new Set(s.collapsedProjects);
@@ -550,6 +641,7 @@ export const useStore = create<AppState>((set) => ({
       sessions: new Map(),
       sdkSessions: [],
       currentSessionId: null,
+      assistantSessionId: null,
       messages: new Map(),
       streaming: new Map(),
       streamingStartedAt: new Map(),
@@ -563,6 +655,8 @@ export const useStore = create<AppState>((set) => ({
       changedFiles: new Map(),
       sessionNames: new Map(),
       recentlyRenamed: new Set(),
+      mcpServers: new Map(),
+      toolProgress: new Map(),
       prStatus: new Map(),
       activeTab: "chat" as const,
       diffPanelSelectedFile: new Map(),

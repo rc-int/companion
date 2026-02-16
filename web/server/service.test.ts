@@ -50,6 +50,12 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
+// Mock path-resolver to return a deterministic enriched PATH
+const MOCK_SERVICE_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/mock/.bun/bin:/mock/.local/bin";
+vi.mock("./path-resolver.js", () => ({
+  getServicePath: () => MOCK_SERVICE_PATH,
+}));
+
 // Mock process.platform
 const originalPlatform = process.platform;
 
@@ -135,6 +141,7 @@ describe("generatePlist", () => {
     const plist = service.generatePlist({ binPath: "/opt/homebrew/bin/the-companion" });
     expect(plist).toContain("<string>/opt/homebrew/bin/the-companion</string>");
     expect(plist).toContain("<string>start</string>");
+    expect(plist).toContain("<string>--foreground</string>");
   });
 
   it("uses the default production port when none specified", () => {
@@ -154,10 +161,16 @@ describe("generatePlist", () => {
     expect(plist).toContain("<string>production</string>");
   });
 
-  it("includes PATH with homebrew and bun directories", () => {
+  it("uses enriched PATH from path-resolver when no path option given", () => {
     const plist = service.generatePlist({ binPath: "/usr/local/bin/the-companion" });
-    expect(plist).toContain("/opt/homebrew/bin");
-    expect(plist).toContain(".bun/bin");
+    expect(plist).toContain(MOCK_SERVICE_PATH);
+  });
+
+  it("uses custom path option when provided", () => {
+    const customPath = "/custom/bin:/other/bin";
+    const plist = service.generatePlist({ binPath: "/usr/local/bin/the-companion", path: customPath });
+    expect(plist).toContain(customPath);
+    expect(plist).not.toContain(MOCK_SERVICE_PATH);
   });
 
   it("includes ThrottleInterval", () => {
@@ -185,7 +198,7 @@ describe("generateSystemdUnit", () => {
 
   it("uses the provided binary path in ExecStart", () => {
     const unit = service.generateSystemdUnit({ binPath: "/home/user/.bun/bin/the-companion" });
-    expect(unit).toContain("ExecStart=/home/user/.bun/bin/the-companion start");
+    expect(unit).toContain("ExecStart=/home/user/.bun/bin/the-companion start --foreground");
   });
 
   it("uses the default production port when none specified", () => {
@@ -203,16 +216,23 @@ describe("generateSystemdUnit", () => {
     expect(unit).toContain("Environment=NODE_ENV=production");
   });
 
-  it("includes restart on failure", () => {
+  it("includes restart always with graceful update exit code", () => {
     const unit = service.generateSystemdUnit({ binPath: "/usr/local/bin/the-companion" });
-    expect(unit).toContain("Restart=on-failure");
+    expect(unit).toContain("Restart=always");
     expect(unit).toContain("RestartSec=5");
+    expect(unit).toContain("SuccessExitStatus=42");
   });
 
-  it("includes PATH with bun and local/bin directories", () => {
+  it("uses enriched PATH from path-resolver when no path option given", () => {
     const unit = service.generateSystemdUnit({ binPath: "/usr/local/bin/the-companion" });
-    expect(unit).toContain(".bun/bin");
-    expect(unit).toContain(".local/bin");
+    expect(unit).toContain(`Environment=PATH=${MOCK_SERVICE_PATH}`);
+  });
+
+  it("uses custom path option when provided", () => {
+    const customPath = "/custom/bin:/other/bin";
+    const unit = service.generateSystemdUnit({ binPath: "/usr/local/bin/the-companion", path: customPath });
+    expect(unit).toContain(`Environment=PATH=${customPath}`);
+    expect(unit).not.toContain(MOCK_SERVICE_PATH);
   });
 
   it("targets default.target for user service", () => {
@@ -357,7 +377,7 @@ describe("install (linux)", () => {
     expect(existsSync(unitPath())).toBe(true);
 
     const content = readFileSync(unitPath(), "utf-8");
-    expect(content).toContain("ExecStart=/usr/local/bin/the-companion start");
+    expect(content).toContain("ExecStart=/usr/local/bin/the-companion start --foreground");
   });
 
   it("calls systemctl daemon-reload and enable --now", async () => {
@@ -541,10 +561,163 @@ describe("uninstall (linux)", () => {
 });
 
 // ===========================================================================
+// start (macOS)
+// ===========================================================================
+describe("start", () => {
+  it("calls launchctl kickstart when installed", async () => {
+    // Install first
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.startsWith("which")) return "/usr/local/bin/the-companion\n";
+      if (cmd.startsWith("launchctl")) return "";
+      return "";
+    });
+    await service.install();
+
+    vi.resetModules();
+    service = await import("./service.js");
+    mockExecSync.mockReset();
+    mockExecSync.mockImplementation(() => "");
+
+    await service.start();
+
+    const startCall = mockExecSync.mock.calls.find(
+      ([cmd]) => typeof cmd === "string" && cmd.startsWith("launchctl kickstart -k"),
+    );
+    expect(startCall).toBeDefined();
+  });
+
+  it("falls back to launchctl bootstrap when kickstart fails", async () => {
+    // Install first
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.startsWith("which")) return "/usr/local/bin/the-companion\n";
+      if (cmd.startsWith("launchctl")) return "";
+      return "";
+    });
+    await service.install();
+
+    vi.resetModules();
+    service = await import("./service.js");
+    mockExecSync.mockReset();
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.startsWith("launchctl kickstart -k")) throw new Error("kickstart failed");
+      if (cmd.startsWith("launchctl bootstrap")) return "";
+      return "";
+    });
+
+    await service.start();
+
+    const bootstrapCall = mockExecSync.mock.calls.find(
+      ([cmd]) => typeof cmd === "string" && cmd.startsWith("launchctl bootstrap"),
+    );
+    expect(bootstrapCall).toBeDefined();
+  });
+
+  it("handles not-installed gracefully", async () => {
+    // Should not throw
+    await service.start();
+  });
+});
+
+// ===========================================================================
+// start (Linux)
+// ===========================================================================
+describe("start (linux)", () => {
+  beforeEach(async () => {
+    mockPlatform.set("linux");
+    Object.defineProperty(process, "platform", { value: "linux" });
+    vi.resetModules();
+    service = await import("./service.js");
+  });
+
+  it("calls systemctl start when installed", async () => {
+    // Install first
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.startsWith("which")) return "/usr/local/bin/the-companion\n";
+      if (cmd.startsWith("systemctl")) return "";
+      return "";
+    });
+    await service.install();
+
+    vi.resetModules();
+    service = await import("./service.js");
+    mockExecSync.mockReset();
+    // start() now calls refreshServiceDefinition() which needs `which`
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.startsWith("which")) return "/usr/local/bin/the-companion\n";
+      return "";
+    });
+
+    await service.start();
+
+    const startCall = mockExecSync.mock.calls.find(
+      ([cmd]) => typeof cmd === "string" && cmd.includes("start the-companion.service"),
+    );
+    expect(startCall).toBeDefined();
+  });
+
+  it("auto-installs and starts when not installed", async () => {
+    // When the service is not installed, start() should auto-install it.
+    // Mock `which` to return a valid binary path so install can proceed.
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.startsWith("which")) return "/usr/local/bin/the-companion\n";
+      if (cmd.startsWith("systemctl")) return "";
+      if (cmd.startsWith("loginctl")) return "";
+      return "";
+    });
+
+    await service.start();
+
+    // Verify unit file was written (install happened)
+    expect(existsSync(unitPath())).toBe(true);
+
+    // Verify systemctl enable --now was called (service started)
+    const enableCall = mockExecSync.mock.calls.find(
+      ([cmd]) => typeof cmd === "string" && cmd.includes("enable --now"),
+    );
+    expect(enableCall).toBeDefined();
+  });
+
+  it("refreshes the service definition before starting an already-installed service", async () => {
+    // Install first with an older-style unit file (missing SuccessExitStatus).
+    // start() should rewrite the unit via refreshServiceDefinition() so that
+    // stale definitions from older versions don't cause restart loops.
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.startsWith("which")) return "/usr/local/bin/the-companion\n";
+      if (cmd.startsWith("systemctl")) return "";
+      return "";
+    });
+    await service.install();
+
+    // Manually overwrite the unit with a stale version (no SuccessExitStatus)
+    const staleUnit = readFileSync(unitPath(), "utf-8")
+      .replace("SuccessExitStatus=42\n", "")
+      .replace("Restart=always", "Restart=on-failure");
+    writeFileSync(unitPath(), staleUnit, "utf-8");
+    expect(readFileSync(unitPath(), "utf-8")).not.toContain("SuccessExitStatus=42");
+
+    vi.resetModules();
+    service = await import("./service.js");
+    mockExecSync.mockReset();
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.startsWith("which")) return "/usr/local/bin/the-companion\n";
+      if (cmd.startsWith("systemctl")) return "";
+      return "";
+    });
+
+    await service.start();
+
+    // Verify the unit file was refreshed with current template values
+    const updatedContent = readFileSync(unitPath(), "utf-8");
+    expect(updatedContent).toContain("SuccessExitStatus=42");
+    expect(updatedContent).toContain("Restart=always");
+  });
+});
+
+// ===========================================================================
 // stop (macOS)
 // ===========================================================================
 describe("stop", () => {
-  it("calls launchctl stop when installed", async () => {
+  it("calls launchctl bootout when installed", async () => {
     // Install first
     mockExecSync.mockImplementation((cmd: string) => {
       if (cmd.startsWith("which")) return "/usr/local/bin/the-companion\n";
@@ -561,12 +734,12 @@ describe("stop", () => {
     await service.stop();
 
     const stopCall = mockExecSync.mock.calls.find(
-      ([cmd]) => typeof cmd === "string" && cmd.startsWith("launchctl stop"),
+      ([cmd]) => typeof cmd === "string" && cmd.startsWith("launchctl bootout"),
     );
     expect(stopCall).toBeDefined();
   });
 
-  it("falls back to launchctl unload when stop fails", async () => {
+  it("falls back to launchctl unload when bootout fails", async () => {
     // Install first
     mockExecSync.mockImplementation((cmd: string) => {
       if (cmd.startsWith("which")) return "/usr/local/bin/the-companion\n";
@@ -579,7 +752,7 @@ describe("stop", () => {
     service = await import("./service.js");
     mockExecSync.mockReset();
     mockExecSync.mockImplementation((cmd: string) => {
-      if (cmd.startsWith("launchctl stop")) throw new Error("stop failed");
+      if (cmd.startsWith("launchctl bootout")) throw new Error("bootout failed");
       if (cmd.startsWith("launchctl unload")) return "";
       return "";
     });
@@ -692,7 +865,11 @@ describe("restart (linux)", () => {
     vi.resetModules();
     service = await import("./service.js");
     mockExecSync.mockReset();
-    mockExecSync.mockImplementation(() => "");
+    // restart() now calls refreshServiceDefinition() which needs `which`
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.startsWith("which")) return "/usr/local/bin/the-companion\n";
+      return "";
+    });
 
     await service.restart();
 
@@ -705,6 +882,37 @@ describe("restart (linux)", () => {
   it("handles not-installed gracefully", async () => {
     // Should not throw
     await service.restart();
+  });
+
+  it("refreshes the service definition before restarting", async () => {
+    // Install first
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.startsWith("which")) return "/usr/local/bin/the-companion\n";
+      if (cmd.startsWith("systemctl")) return "";
+      return "";
+    });
+    await service.install();
+
+    // Manually write a stale unit (no SuccessExitStatus)
+    const staleUnit = readFileSync(unitPath(), "utf-8")
+      .replace("SuccessExitStatus=42\n", "");
+    writeFileSync(unitPath(), staleUnit, "utf-8");
+    expect(readFileSync(unitPath(), "utf-8")).not.toContain("SuccessExitStatus=42");
+
+    vi.resetModules();
+    service = await import("./service.js");
+    mockExecSync.mockReset();
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.startsWith("which")) return "/usr/local/bin/the-companion\n";
+      if (cmd.startsWith("systemctl")) return "";
+      return "";
+    });
+
+    await service.restart();
+
+    // Verify the unit file was refreshed with current template
+    const updatedContent = readFileSync(unitPath(), "utf-8");
+    expect(updatedContent).toContain("SuccessExitStatus=42");
   });
 });
 
@@ -1015,6 +1223,147 @@ describe("isRunningAsService (linux)", () => {
     });
 
     expect(service.isRunningAsService()).toBe(false);
+  });
+});
+
+// ===========================================================================
+// refreshServiceDefinition (macOS)
+// ===========================================================================
+describe("refreshServiceDefinition (macOS)", () => {
+  it("rewrites plist with current binary path", async () => {
+    // Install first
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.startsWith("which")) return "/usr/local/bin/the-companion\n";
+      if (cmd.startsWith("launchctl")) return "";
+      return "";
+    });
+    await service.install();
+
+    // Verify plist exists with original binary
+    const originalContent = readFileSync(plistPath(), "utf-8");
+    expect(originalContent).toContain("/usr/local/bin/the-companion");
+
+    // Now refresh with a different binary path
+    vi.resetModules();
+    service = await import("./service.js");
+    mockExecSync.mockReset();
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.startsWith("which")) return "/new/path/the-companion\n";
+      return "";
+    });
+
+    service.refreshServiceDefinition();
+
+    const updatedContent = readFileSync(plistPath(), "utf-8");
+    expect(updatedContent).toContain("/new/path/the-companion");
+  });
+
+  it("preserves custom port from existing plist", async () => {
+    // Install with custom port
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.startsWith("which")) return "/usr/local/bin/the-companion\n";
+      if (cmd.startsWith("launchctl")) return "";
+      return "";
+    });
+    await service.install({ port: 9999 });
+
+    const originalContent = readFileSync(plistPath(), "utf-8");
+    expect(originalContent).toContain("9999");
+
+    // Refresh
+    vi.resetModules();
+    service = await import("./service.js");
+    mockExecSync.mockReset();
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.startsWith("which")) return "/usr/local/bin/the-companion\n";
+      return "";
+    });
+
+    service.refreshServiceDefinition();
+
+    const updatedContent = readFileSync(plistPath(), "utf-8");
+    expect(updatedContent).toContain("9999");
+  });
+
+  it("is a no-op when service is not installed", () => {
+    // Should not throw
+    service.refreshServiceDefinition();
+  });
+});
+
+// ===========================================================================
+// refreshServiceDefinition (Linux)
+// ===========================================================================
+describe("refreshServiceDefinition (linux)", () => {
+  beforeEach(async () => {
+    mockPlatform.set("linux");
+    Object.defineProperty(process, "platform", { value: "linux" });
+    vi.resetModules();
+    service = await import("./service.js");
+  });
+
+  it("rewrites unit file and calls daemon-reload", async () => {
+    // Install first
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.startsWith("which")) return "/usr/local/bin/the-companion\n";
+      if (cmd.startsWith("systemctl")) return "";
+      return "";
+    });
+    await service.install();
+
+    // Refresh with a different binary path
+    vi.resetModules();
+    service = await import("./service.js");
+    mockExecSync.mockReset();
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.startsWith("which")) return "/new/path/the-companion\n";
+      if (cmd.startsWith("systemctl")) return "";
+      return "";
+    });
+
+    service.refreshServiceDefinition();
+
+    const updatedContent = readFileSync(unitPath(), "utf-8");
+    expect(updatedContent).toContain("/new/path/the-companion");
+
+    // Verify daemon-reload was called
+    const daemonReloadCall = mockExecSync.mock.calls.find(
+      ([cmd]) => typeof cmd === "string" && cmd.includes("daemon-reload"),
+    );
+    expect(daemonReloadCall).toBeDefined();
+  });
+
+  it("preserves custom port from existing unit", async () => {
+    // Install with custom port
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.startsWith("which")) return "/usr/local/bin/the-companion\n";
+      if (cmd.startsWith("systemctl")) return "";
+      return "";
+    });
+    await service.install({ port: 9999 });
+
+    const originalContent = readFileSync(unitPath(), "utf-8");
+    expect(originalContent).toContain("PORT=9999");
+
+    // Refresh
+    vi.resetModules();
+    service = await import("./service.js");
+    mockExecSync.mockReset();
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.startsWith("which")) return "/usr/local/bin/the-companion\n";
+      if (cmd.startsWith("systemctl")) return "";
+      return "";
+    });
+
+    service.refreshServiceDefinition();
+
+    const updatedContent = readFileSync(unitPath(), "utf-8");
+    expect(updatedContent).toContain("PORT=9999");
+  });
+
+  it("is a no-op when service is not installed", () => {
+    // Should not throw
+    service.refreshServiceDefinition();
   });
 });
 

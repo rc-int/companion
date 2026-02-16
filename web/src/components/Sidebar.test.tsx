@@ -20,6 +20,7 @@ const mockApi = {
   deleteSession: vi.fn().mockResolvedValue({}),
   archiveSession: vi.fn().mockResolvedValue({}),
   unarchiveSession: vi.fn().mockResolvedValue({}),
+  getAssistantStatus: vi.fn().mockResolvedValue({ running: false, sessionId: null }),
 };
 
 vi.mock("../api.js", () => ({
@@ -28,12 +29,8 @@ vi.mock("../api.js", () => ({
     deleteSession: (...args: unknown[]) => mockApi.deleteSession(...args),
     archiveSession: (...args: unknown[]) => mockApi.archiveSession(...args),
     unarchiveSession: (...args: unknown[]) => mockApi.unarchiveSession(...args),
+    getAssistantStatus: (...args: unknown[]) => mockApi.getAssistantStatus(...args),
   },
-}));
-
-// Mock EnvManager to avoid rendering complexity
-vi.mock("./EnvManager.js", () => ({
-  EnvManager: () => <div data-testid="env-manager">EnvManager</div>,
 }));
 
 // ─── Store mock helpers ──────────────────────────────────────────────────────
@@ -45,8 +42,7 @@ interface MockStoreState {
   sessions: Map<string, SessionState>;
   sdkSessions: SdkSessionInfo[];
   currentSessionId: string | null;
-  darkMode: boolean;
-  notificationSound: boolean;
+  assistantSessionId: string | null;
   cliConnected: Map<string, boolean>;
   sessionStatus: Map<string, "idle" | "running" | "compacting" | null>;
   sessionNames: Map<string, string>;
@@ -54,8 +50,7 @@ interface MockStoreState {
   pendingPermissions: Map<string, Map<string, unknown>>;
   collapsedProjects: Set<string>;
   setCurrentSession: ReturnType<typeof vi.fn>;
-  toggleDarkMode: ReturnType<typeof vi.fn>;
-  toggleNotificationSound: ReturnType<typeof vi.fn>;
+  setAssistantSessionId: ReturnType<typeof vi.fn>;
   toggleProjectCollapse: ReturnType<typeof vi.fn>;
   removeSession: ReturnType<typeof vi.fn>;
   newSession: ReturnType<typeof vi.fn>;
@@ -64,6 +59,7 @@ interface MockStoreState {
   markRecentlyRenamed: ReturnType<typeof vi.fn>;
   clearRecentlyRenamed: ReturnType<typeof vi.fn>;
   setSdkSessions: ReturnType<typeof vi.fn>;
+  closeTerminal: ReturnType<typeof vi.fn>;
 }
 
 function makeSession(id: string, overrides: Partial<SessionState> = {}): SessionState {
@@ -111,8 +107,7 @@ function createMockState(overrides: Partial<MockStoreState> = {}): MockStoreStat
     sessions: new Map(),
     sdkSessions: [],
     currentSessionId: null,
-    darkMode: false,
-    notificationSound: true,
+    assistantSessionId: null,
     cliConnected: new Map(),
     sessionStatus: new Map(),
     sessionNames: new Map(),
@@ -120,8 +115,7 @@ function createMockState(overrides: Partial<MockStoreState> = {}): MockStoreStat
     pendingPermissions: new Map(),
     collapsedProjects: new Set(),
     setCurrentSession: vi.fn(),
-    toggleDarkMode: vi.fn(),
-    toggleNotificationSound: vi.fn(),
+    setAssistantSessionId: vi.fn(),
     toggleProjectCollapse: vi.fn(),
     removeSession: vi.fn(),
     newSession: vi.fn(),
@@ -130,6 +124,7 @@ function createMockState(overrides: Partial<MockStoreState> = {}): MockStoreStat
     markRecentlyRenamed: vi.fn(),
     clearRecentlyRenamed: vi.fn(),
     setSdkSessions: vi.fn(),
+    closeTerminal: vi.fn(),
     ...overrides,
   };
 }
@@ -155,6 +150,7 @@ import { Sidebar } from "./Sidebar.js";
 beforeEach(() => {
   vi.clearAllMocks();
   mockState = createMockState();
+  window.location.hash = "";
 });
 
 describe("Sidebar", () => {
@@ -348,6 +344,40 @@ describe("Sidebar", () => {
     expect(archiveButton).toBeInTheDocument();
   });
 
+  it("archive action button is visible by default on mobile and hover-only on desktop", () => {
+    const session = makeSession("s1");
+    const sdk = makeSdkSession("s1");
+    mockState = createMockState({
+      sessions: new Map([["s1", session]]),
+      sdkSessions: [sdk],
+    });
+
+    render(<Sidebar />);
+    const archiveButton = screen.getByTitle("Archive session");
+
+    expect(archiveButton).toHaveClass("opacity-100");
+    expect(archiveButton).toHaveClass("sm:opacity-0");
+    expect(archiveButton).toHaveClass("sm:group-hover:opacity-100");
+  });
+
+  it("permission badge uses mobile-friendly positioning and hover behavior", () => {
+    const session = makeSession("s1");
+    const sdk = makeSdkSession("s1");
+    mockState = createMockState({
+      sessions: new Map([["s1", session]]),
+      sdkSessions: [sdk],
+      pendingPermissions: new Map([["s1", new Map([["p1", {}]])]]),
+    });
+
+    render(<Sidebar />);
+    const mobilePermissionBadge = screen.getAllByText("1").find((node) =>
+      node.classList.contains("bg-cc-warning") && node.classList.contains("px-1"),
+    )!;
+    expect(mobilePermissionBadge).toHaveClass("right-8");
+    expect(mobilePermissionBadge).toHaveClass("sm:right-2");
+    expect(mobilePermissionBadge).toHaveClass("sm:group-hover:opacity-0");
+  });
+
   it("archived sessions section shows count", () => {
     const sdk1 = makeSdkSession("s1", { archived: false });
     const sdk2 = makeSdkSession("s2", { archived: true });
@@ -383,14 +413,28 @@ describe("Sidebar", () => {
     expect(screen.getByText("archived-model")).toBeInTheDocument();
   });
 
-  it("dark mode button toggles theme", () => {
-    mockState = createMockState({ darkMode: false });
-
+  it("does not render settings controls directly in sidebar", () => {
     render(<Sidebar />);
-    const darkModeButton = screen.getByText("Dark mode").closest("button")!;
-    fireEvent.click(darkModeButton);
+    expect(screen.queryByText("Notification")).not.toBeInTheDocument();
+    expect(screen.queryByText("Dark mode")).not.toBeInTheDocument();
+  });
 
-    expect(mockState.toggleDarkMode).toHaveBeenCalled();
+  it("navigates to environments page when Environments is clicked", () => {
+    render(<Sidebar />);
+    fireEvent.click(screen.getByText("Environments").closest("button")!);
+    expect(window.location.hash).toBe("#/environments");
+  });
+
+  it("navigates to settings page when Settings is clicked", () => {
+    render(<Sidebar />);
+    fireEvent.click(screen.getByText("Settings").closest("button")!);
+    expect(window.location.hash).toBe("#/settings");
+  });
+
+  it("navigates to terminal page when Terminal is clicked", () => {
+    render(<Sidebar />);
+    fireEvent.click(screen.getByText("Terminal").closest("button")!);
+    expect(window.location.hash).toBe("#/terminal");
   });
 
   it("session name shows animate-name-appear class when recently renamed", () => {
@@ -434,9 +478,31 @@ describe("Sidebar", () => {
       recentlyRenamed: new Set(["s1"]),
     });
 
-    render(<Sidebar />);
-    const nameElement = screen.getByText("Animated Name");
-    fireEvent.animationEnd(nameElement);
+    const { container } = render(<Sidebar />);
+    // The animated span has the animate-name-appear class and an onAnimationEnd
+    // handler that calls onClearRecentlyRenamed(sessionId).
+    const animatedSpan = container.querySelector(".animate-name-appear");
+    expect(animatedSpan).toBeTruthy();
+
+    // JSDOM does not define AnimationEvent in all environments, which
+    // causes fireEvent.animationEnd to silently fail. We traverse the
+    // React fiber tree to invoke the onAnimationEnd handler directly.
+    const fiberKey = Object.keys(animatedSpan!).find((k) =>
+      k.startsWith("__reactFiber$"),
+    );
+    expect(fiberKey).toBeDefined();
+    let fiber = (animatedSpan as unknown as Record<string, unknown>)[fiberKey!] as Record<string, unknown> | null;
+    let called = false;
+    while (fiber) {
+      const props = fiber.memoizedProps as Record<string, unknown> | undefined;
+      if (props?.onAnimationEnd) {
+        (props.onAnimationEnd as () => void)();
+        called = true;
+        break;
+      }
+      fiber = fiber.return as Record<string, unknown> | null;
+    }
+    expect(called).toBe(true);
     expect(mockState.clearRecentlyRenamed).toHaveBeenCalledWith("s1");
   });
 

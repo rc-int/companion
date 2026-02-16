@@ -1,11 +1,24 @@
 import { randomUUID } from "node:crypto";
-import { execSync } from "node:child_process";
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  mkdirSync,
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  copyFileSync,
+  cpSync,
+  realpathSync,
+} from "node:fs";
+import { join, resolve } from "node:path";
 import type { Subprocess } from "bun";
 import type { SessionStore } from "./session-store.js";
 import type { BackendType } from "./session-types.js";
+import type { RecorderManager } from "./recorder.js";
 import { CodexAdapter } from "./codex-adapter.js";
+import { resolveBinary, getEnrichedPath } from "./path-resolver.js";
+import {
+  getLegacyCodexHome,
+  resolveCompanionCodexSessionHome,
+} from "./codex-home.js";
 
 export interface SdkSessionInfo {
   sessionId: string;
@@ -45,6 +58,10 @@ export interface SdkSessionInfo {
   codexInternetAccess?: boolean;
   /** Sandbox mode selected for Codex sessions */
   codexSandbox?: "workspace-write" | "danger-full-access";
+  /** If this session was spawned by a cron job */
+  cronJobId?: string;
+  /** Human-readable name of the cron job that spawned this session */
+  cronJobName?: string;
 }
 
 export interface LaunchOptions {
@@ -60,8 +77,8 @@ export interface LaunchOptions {
   codexSandbox?: "workspace-write" | "danger-full-access";
   /** Whether Codex internet/web search should be enabled for this session. */
   codexInternetAccess?: boolean;
-  /** Resume an existing Claude CLI session by its internal session ID */
-  resumeSessionId?: string;
+  /** Optional override for CODEX_HOME used by Codex sessions. */
+  codexHome?: string;
   /** Pre-resolved worktree info from the session creation flow */
   worktreeInfo?: {
     isWorktree: boolean;
@@ -81,7 +98,9 @@ export class CliLauncher {
   private processes = new Map<string, Subprocess>();
   private port: number;
   private store: SessionStore | null = null;
+  private recorder: RecorderManager | null = null;
   private onCodexAdapter: ((sessionId: string, adapter: CodexAdapter) => void) | null = null;
+  private exitHandlers: ((sessionId: string, exitCode: number | null) => void)[] = [];
 
   constructor(port: number) {
     this.port = port;
@@ -92,9 +111,19 @@ export class CliLauncher {
     this.onCodexAdapter = cb;
   }
 
+  /** Register a callback for when a CLI/Codex process exits. */
+  onSessionExited(cb: (sessionId: string, exitCode: number | null) => void): void {
+    this.exitHandlers.push(cb);
+  }
+
   /** Attach a persistent store for surviving server restarts. */
   setStore(store: SessionStore): void {
     this.store = store;
+  }
+
+  /** Attach a recorder for raw message capture. */
+  setRecorder(recorder: RecorderManager): void {
+    this.recorder = recorder;
   }
 
   /** Persist launcher state to disk. */
@@ -237,12 +266,15 @@ export class CliLauncher {
 
   private spawnCLI(sessionId: string, info: SdkSessionInfo, options: LaunchOptions & { resumeSessionId?: string }): void {
     let binary = options.claudeBinary || "claude";
-    if (!binary.startsWith("/")) {
-      try {
-        binary = execSync(`which ${binary}`, { encoding: "utf-8" }).trim();
-      } catch {
-        // fall through, hope it's in PATH
-      }
+    const resolved = resolveBinary(binary);
+    if (resolved) {
+      binary = resolved;
+    } else {
+      console.error(`[cli-launcher] Binary "${binary}" not found in PATH`);
+      info.state = "exited";
+      info.exitCode = 127;
+      this.persistState();
+      return;
     }
 
     const sdkUrl = `ws://localhost:${this.port}/ws/cli/${sessionId}`;
@@ -284,10 +316,13 @@ export class CliLauncher {
     }
     args.push("-p", "");
 
+    // Use enriched PATH so spawned CLI processes inherit the user's
+    // full PATH (nvm, volta, etc.) regardless of how the server started.
     const env: Record<string, string | undefined> = {
       ...process.env,
       CLAUDECODE: undefined,
       ...options.env,
+      PATH: getEnrichedPath(),
     };
 
     console.log(`[cli-launcher] Spawning session ${sessionId}: ${binary} ${args.join(" ")}`);
@@ -324,6 +359,9 @@ export class CliLauncher {
       }
       this.processes.delete(sessionId);
       this.persistState();
+      for (const handler of this.exitHandlers) {
+        try { handler(sessionId, exitCode); } catch {}
+      }
     });
 
     this.persistState();
@@ -333,29 +371,103 @@ export class CliLauncher {
    * Spawn a Codex app-server subprocess for a session.
    * Unlike Claude Code (which connects back via WebSocket), Codex uses stdio.
    */
+  private prepareCodexHome(codexHome: string): void {
+    mkdirSync(codexHome, { recursive: true });
+
+    const legacyHome = getLegacyCodexHome();
+    if (resolve(legacyHome) === resolve(codexHome) || !existsSync(legacyHome)) {
+      return;
+    }
+
+    // Bootstrap only the user-level artifacts Codex needs (auth/config/skills),
+    // while intentionally skipping sessions/sqlite to avoid stale rollout indexes.
+    const fileSeeds = ["auth.json", "config.toml", "models_cache.json", "version.json"];
+    for (const name of fileSeeds) {
+      try {
+        const src = join(legacyHome, name);
+        const dest = join(codexHome, name);
+        if (!existsSync(dest) && existsSync(src)) {
+          copyFileSync(src, dest);
+        }
+      } catch (e) {
+        console.warn(`[cli-launcher] Failed to bootstrap ${name} from legacy home:`, e);
+      }
+    }
+
+    const dirSeeds = ["skills", "vendor_imports", "prompts", "rules"];
+    for (const name of dirSeeds) {
+      try {
+        const src = join(legacyHome, name);
+        const dest = join(codexHome, name);
+        if (!existsSync(dest) && existsSync(src)) {
+          cpSync(src, dest, { recursive: true });
+        }
+      } catch (e) {
+        console.warn(`[cli-launcher] Failed to bootstrap ${name}/ from legacy home:`, e);
+      }
+    }
+  }
+
   private spawnCodex(sessionId: string, info: SdkSessionInfo, options: LaunchOptions): void {
     let binary = options.codexBinary || "codex";
-    if (!binary.startsWith("/")) {
-      try {
-        binary = execSync(`which ${binary}`, { encoding: "utf-8" }).trim();
-      } catch {
-        // fall through, hope it's in PATH
-      }
+    const resolved = resolveBinary(binary);
+    if (resolved) {
+      binary = resolved;
+    } else {
+      console.error(`[cli-launcher] Binary "${binary}" not found in PATH`);
+      info.state = "exited";
+      info.exitCode = 127;
+      this.persistState();
+      return;
     }
 
     const args: string[] = ["app-server"];
     const internetEnabled = options.codexInternetAccess === true;
     args.push("-c", `tools.webSearch=${internetEnabled ? "true" : "false"}`);
+    const codexHome = resolveCompanionCodexSessionHome(
+      sessionId,
+      options.codexHome,
+    );
+    this.prepareCodexHome(codexHome);
+
+    // The codex binary is a Node.js script with `#!/usr/bin/env node` shebang.
+    // When Bun.spawn executes it, the kernel resolves `node` via /usr/bin/env
+    // which may find the system Node (e.g. v12) instead of the nvm-managed one.
+    // To guarantee the correct Node version, we resolve the `node` binary that
+    // lives alongside `codex` and spawn `node <codex.js>` directly.
+    const binaryDir = resolve(binary, "..");
+    const siblingNode = join(binaryDir, "node");
+    const enrichedPath = getEnrichedPath();
+    const spawnPath = [binaryDir, ...enrichedPath.split(":")].filter(Boolean).join(":");
+
+    // Determine whether to invoke node explicitly or use the binary directly.
+    // If a `node` binary exists next to `codex`, use it to bypass shebang issues.
+    let spawnCmd: string[];
+    if (existsSync(siblingNode)) {
+      // Resolve the real path of the codex script (follows symlinks)
+      // so node can load it as an ES module with the correct package.json context.
+      let codexScript: string;
+      try {
+        codexScript = realpathSync(binary);
+      } catch {
+        codexScript = binary;
+      }
+      spawnCmd = [siblingNode, codexScript, ...args];
+    } else {
+      spawnCmd = [binary, ...args];
+    }
 
     const env: Record<string, string | undefined> = {
       ...process.env,
       CLAUDECODE: undefined,
       ...options.env,
+      CODEX_HOME: codexHome,
+      PATH: spawnPath,
     };
 
-    console.log(`[cli-launcher] Spawning Codex session ${sessionId}: ${binary} ${args.join(" ")}`);
+    console.log(`[cli-launcher] Spawning Codex session ${sessionId}: ${spawnCmd.join(" ")}`);
 
-    const proc = Bun.spawn([binary, ...args], {
+    const proc = Bun.spawn(spawnCmd, {
       cwd: info.cwd,
       env,
       stdin: "pipe",
@@ -380,15 +492,19 @@ export class CliLauncher {
       approvalMode: options.permissionMode,
       threadId: info.cliSessionId,
       sandbox: options.codexSandbox,
+      recorder: this.recorder ?? undefined,
     });
 
-    // Handle init errors — mark session as exited so UI shows failure
+    // Handle init errors — mark session as exited so UI shows failure.
+    // Also clear cliSessionId so the next relaunch starts a fresh thread
+    // instead of trying to resume one whose rollout may be missing.
     adapter.onInitError((error) => {
       console.error(`[cli-launcher] Codex session ${sessionId} init failed: ${error}`);
       const session = this.sessions.get(sessionId);
       if (session) {
         session.state = "exited";
         session.exitCode = 1;
+        session.cliSessionId = undefined;
       }
       this.persistState();
     });
@@ -412,6 +528,9 @@ export class CliLauncher {
       }
       this.processes.delete(sessionId);
       this.persistState();
+      for (const handler of this.exitHandlers) {
+        try { handler(sessionId, exitCode); } catch {}
+      }
     });
 
     this.persistState();

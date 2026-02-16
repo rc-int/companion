@@ -2,6 +2,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import { useStore } from "./store.js";
 import { connectSession } from "./ws.js";
 import { api } from "./api.js";
+import { capturePageView } from "./analytics.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { ChatView } from "./components/ChatView.js";
 import { TopBar } from "./components/TopBar.js";
@@ -10,8 +11,10 @@ import { TaskPanel } from "./components/TaskPanel.js";
 import { DiffPanel } from "./components/DiffPanel.js";
 import { Playground } from "./components/Playground.js";
 import { UpdateBanner } from "./components/UpdateBanner.js";
-import { TerminalView } from "./components/TerminalView.js";
 import { SettingsPage } from "./components/SettingsPage.js";
+import { EnvManager } from "./components/EnvManager.js";
+import { CronManager } from "./components/CronManager.js";
+import { TerminalPage } from "./components/TerminalPage.js";
 
 function useHash() {
   return useSyncExternalStore(
@@ -27,9 +30,17 @@ export default function App() {
   const taskPanelOpen = useStore((s) => s.taskPanelOpen);
   const homeResetKey = useStore((s) => s.homeResetKey);
   const activeTab = useStore((s) => s.activeTab);
-  const terminalOpen = useStore((s) => s.terminalOpen);
-  const terminalCwd = useStore((s) => s.terminalCwd);
+  const assistantSessionId = useStore((s) => s.assistantSessionId);
   const hash = useHash();
+  const isSettingsPage = hash === "#/settings";
+  const isTerminalPage = hash === "#/terminal";
+  const isEnvironmentsPage = hash === "#/environments";
+  const isScheduledPage = hash === "#/scheduled";
+  const isSessionView = !isSettingsPage && !isTerminalPage && !isEnvironmentsPage && !isScheduledPage;
+
+  useEffect(() => {
+    capturePageView(hash || "#/");
+  }, [hash]);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", darkMode);
@@ -57,9 +68,6 @@ export default function App() {
 
   if (hash === "#/playground") {
     return <Playground />;
-  }
-  if (hash === "#/settings") {
-    return <SettingsPage />;
   }
 
   return (
@@ -89,26 +97,54 @@ export default function App() {
         <TopBar />
         <UpdateBanner />
         <div className="flex-1 overflow-hidden relative">
-          {/* Chat tab — visible when activeTab is "chat" or no session */}
-          <div className={`absolute inset-0 ${activeTab === "chat" || !currentSessionId ? "" : "hidden"}`}>
-            {currentSessionId ? (
-              <ChatView sessionId={currentSessionId} />
-            ) : (
-              <HomePage key={homeResetKey} />
-            )}
-          </div>
-
-          {/* Diff tab */}
-          {currentSessionId && activeTab === "diff" && (
+          {isSettingsPage && (
             <div className="absolute inset-0">
-              <DiffPanel sessionId={currentSessionId} />
+              <SettingsPage embedded />
             </div>
+          )}
+
+          {isTerminalPage && (
+            <div className="absolute inset-0">
+              <TerminalPage />
+            </div>
+          )}
+
+          {isEnvironmentsPage && (
+            <div className="absolute inset-0">
+              <EnvManager embedded />
+            </div>
+          )}
+
+          {isScheduledPage && (
+            <div className="absolute inset-0">
+              <CronManager embedded />
+            </div>
+          )}
+
+          {isSessionView && (
+            <>
+              {/* Chat tab — visible when activeTab is "chat" or no session */}
+              <div className={`absolute inset-0 ${activeTab === "chat" || !currentSessionId ? "" : "hidden"}`}>
+                {currentSessionId ? (
+                  <ChatView sessionId={currentSessionId} />
+                ) : (
+                  <HomePage key={homeResetKey} />
+                )}
+              </div>
+
+              {/* Diff tab — not shown for assistant session */}
+              {currentSessionId && activeTab === "diff" && currentSessionId !== assistantSessionId && (
+                <div className="absolute inset-0">
+                  <DiffPanel sessionId={currentSessionId} />
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
 
       {/* Task panel — overlay on mobile, inline on desktop */}
-      {currentSessionId && (
+      {currentSessionId && isSessionView && (
         <>
           {/* Mobile overlay backdrop */}
           {taskPanelOpen && (
@@ -129,14 +165,6 @@ export default function App() {
             <TaskPanel sessionId={currentSessionId} />
           </div>
         </>
-      )}
-
-      {/* Global terminal overlay */}
-      {terminalOpen && terminalCwd && (
-        <TerminalView
-          cwd={terminalCwd}
-          onClose={() => useStore.getState().closeTerminal()}
-        />
       )}
     </div>
   );
