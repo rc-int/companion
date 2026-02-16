@@ -19,6 +19,7 @@ import {
   getUpdateState,
   checkForUpdate,
   isUpdateAvailable,
+  isNewerVersion,
   setUpdateInProgress,
 } from "./update-checker.js";
 
@@ -913,10 +914,18 @@ export function createRoutes(
   api.get("/update-check", (c) => {
     const state = getUpdateState();
     return c.json({
-      currentVersion: state.currentVersion,
-      latestVersion: state.latestVersion,
-      updateAvailable: isUpdateAvailable(),
-      isServiceMode: state.isServiceMode,
+      wilco: {
+        current: state.wilco.current,
+        latest: state.wilco.latest,
+        updateAvailable: state.wilco.latest !== null &&
+          isNewerVersion(state.wilco.latest, state.wilco.current),
+      },
+      companion: {
+        current: state.companion.current,
+        latest: state.companion.latest,
+        updateAvailable: state.companion.latest !== null &&
+          isNewerVersion(state.companion.latest, state.companion.current),
+      },
       updateInProgress: state.updateInProgress,
       lastChecked: state.lastChecked,
     });
@@ -926,56 +935,90 @@ export function createRoutes(
     await checkForUpdate();
     const state = getUpdateState();
     return c.json({
-      currentVersion: state.currentVersion,
-      latestVersion: state.latestVersion,
-      updateAvailable: isUpdateAvailable(),
-      isServiceMode: state.isServiceMode,
+      wilco: {
+        current: state.wilco.current,
+        latest: state.wilco.latest,
+        updateAvailable: state.wilco.latest !== null &&
+          isNewerVersion(state.wilco.latest, state.wilco.current),
+      },
+      companion: {
+        current: state.companion.current,
+        latest: state.companion.latest,
+        updateAvailable: state.companion.latest !== null &&
+          isNewerVersion(state.companion.latest, state.companion.current),
+      },
       updateInProgress: state.updateInProgress,
       lastChecked: state.lastChecked,
     });
   });
 
   api.post("/update", async (c) => {
-    const state = getUpdateState();
-    if (!state.isServiceMode) {
-      return c.json(
-        { error: "Update & restart is only available in service mode" },
-        400,
-      );
-    }
     if (!isUpdateAvailable()) {
       return c.json({ error: "No update available" }, 400);
     }
+    const state = getUpdateState();
     if (state.updateInProgress) {
       return c.json({ error: "Update already in progress" }, 409);
     }
 
     setUpdateInProgress(true);
 
+    const home = homedir();
+    const wilcoDir = resolve(home, "wilco");
+    const companionDir = resolve(home, "wilco", "companion");
+
     // Respond immediately, then perform update async
     setTimeout(async () => {
       try {
-        console.log(
-          `[update] Updating the-companion to ${state.latestVersion}...`,
-        );
-        const proc = Bun.spawn(
-          ["bun", "install", "-g", `the-companion@${state.latestVersion}`],
-          { stdout: "pipe", stderr: "pipe" },
-        );
-        const exitCode = await proc.exited;
-        if (exitCode !== 0) {
-          const stderr = await new Response(proc.stderr).text();
-          console.error(
-            `[update] bun install failed (code ${exitCode}):`,
-            stderr,
-          );
-          setUpdateInProgress(false);
-          return;
+        console.log("[update] Starting update...");
+
+        // 1. git pull wilco
+        console.log("[update] Pulling wilco...");
+        const gitWilco = Bun.spawn(["git", "-C", wilcoDir, "pull", "origin", "main"], {
+          stdout: "pipe", stderr: "pipe",
+        });
+        if (await gitWilco.exited !== 0) {
+          const stderr = await new Response(gitWilco.stderr).text();
+          throw new Error(`git pull wilco failed: ${stderr}`);
         }
-        console.log(
-          "[update] Update successful, exiting for service restart...",
-        );
-        // Exit with non-zero code so the service manager restarts us
+
+        // 2. git pull companion
+        console.log("[update] Pulling companion...");
+        const gitCompanion = Bun.spawn(["git", "-C", companionDir, "pull", "origin", "main"], {
+          stdout: "pipe", stderr: "pipe",
+        });
+        if (await gitCompanion.exited !== 0) {
+          const stderr = await new Response(gitCompanion.stderr).text();
+          throw new Error(`git pull companion failed: ${stderr}`);
+        }
+
+        // 3. bun install in wilco (if bun.lock changed)
+        console.log("[update] Installing wilco deps...");
+        const bunWilco = Bun.spawn(["bun", "install"], {
+          cwd: wilcoDir, stdout: "pipe", stderr: "pipe",
+        });
+        await bunWilco.exited;
+
+        // 4. bun install in companion/web (if bun.lock changed)
+        console.log("[update] Installing companion deps...");
+        const bunCompanion = Bun.spawn(["bun", "install"], {
+          cwd: resolve(companionDir, "web"), stdout: "pipe", stderr: "pipe",
+        });
+        await bunCompanion.exited;
+
+        // 5. pipx install -e wilco
+        console.log("[update] Reinstalling wilco CLI via pipx...");
+        const pipx = Bun.spawn(["pipx", "install", "-e", wilcoDir, "--force"], {
+          stdout: "pipe", stderr: "pipe",
+        });
+        if (await pipx.exited !== 0) {
+          const stderr = await new Response(pipx.stderr).text();
+          console.warn(`[update] pipx install warning: ${stderr}`);
+          // Non-fatal — CLI may still work from editable install
+        }
+
+        // 6. Exit for systemd restart
+        console.log("[update] Update successful, exiting for service restart...");
         process.exit(42);
       } catch (err) {
         console.error("[update] Update failed:", err);
@@ -987,6 +1030,7 @@ export function createRoutes(
       ok: true,
       message: "Update started. Server will restart shortly.",
     });
+  });
   });
 
   // ─── Helper ─────────────────────────────────────────────────────────

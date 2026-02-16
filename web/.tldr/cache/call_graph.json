@@ -1,0 +1,2468 @@
+{
+  "edges": [
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handlePermissionResponse",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "sendToCLI"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "uninstallDarwin",
+      "to_file": "server/service.ts",
+      "to_func": "getInstalledLaunchdService"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.emitToolResult",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "makeMessageId"
+    },
+    {
+      "from_file": "server/env-manager.ts",
+      "from_func": "updateEnv",
+      "to_file": "server/env-manager.ts",
+      "to_func": "slugify"
+    },
+    {
+      "from_file": "server/cli-launcher.ts",
+      "from_func": "CliLauncher.pipeOutput",
+      "to_file": "server/cli-launcher.ts",
+      "to_func": "pipeStream"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.routeCLIMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "handleToolUseSummary"
+    },
+    {
+      "from_file": "src/ws.ts",
+      "from_func": "connectSession",
+      "to_file": "src/ws.ts",
+      "to_func": "getWsUrl"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/env-manager.ts",
+      "to_func": "getEnv"
+    },
+    {
+      "from_file": "server/container-manager.ts",
+      "from_func": "ContainerManager.listImages",
+      "to_file": "server/container-manager.ts",
+      "to_func": "exec"
+    },
+    {
+      "from_file": "server/cli-launcher.ts",
+      "from_func": "CliLauncher.spawnCLI",
+      "to_file": "server/cli-launcher.ts",
+      "to_func": "pipeOutput"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/update-checker.ts",
+      "to_func": "setUpdateInProgress"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "installDarwin",
+      "to_file": "server/service.ts",
+      "to_func": "generatePlist"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "JsonRpcTransport.constructor",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "readStdout"
+    },
+    {
+      "from_file": "server/usage-limits.ts",
+      "from_func": "getValidAccessToken",
+      "to_file": "server/usage-limits.ts",
+      "to_func": "readRawCredentials"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "installLinux",
+      "to_file": "server/service.ts",
+      "to_func": "resolveBinPath"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "getBranchStatus",
+      "to_file": "server/git-utils.ts",
+      "to_func": "gitSafe"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleBrowserOpen",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "onCLIRelaunchNeeded"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "listWorktrees",
+      "to_file": "server/git-utils.ts",
+      "to_func": "gitSafe"
+    },
+    {
+      "from_file": "src/components/MessageFeed.tsx",
+      "from_func": "groupToolMessages",
+      "to_file": "src/components/MessageFeed.tsx",
+      "to_func": "extractToolItems"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/update-checker.ts",
+      "to_func": "getUpdateState"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "worktreeDir",
+      "to_file": "server/git-utils.ts",
+      "to_func": "sanitizeBranch"
+    },
+    {
+      "from_file": "server/session-store.ts",
+      "from_func": "SessionStore.saveSync",
+      "to_file": "server/session-store.ts",
+      "to_func": "filePath"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/git-utils.ts",
+      "to_func": "isWorktreeDirty"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "restart",
+      "to_file": "server/service.ts",
+      "to_func": "restartDarwin"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.emitToolUse",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emit"
+    },
+    {
+      "from_file": "server/container-manager.ts",
+      "from_func": "ContainerManager.resolvePortMappings",
+      "to_file": "server/container-manager.ts",
+      "to_func": "exec"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "uninstallLinux",
+      "to_file": "server/service.ts",
+      "to_func": "systemctlUser"
+    },
+    {
+      "from_file": "server/worktree-tracker.ts",
+      "from_func": "WorktreeTracker.addMapping",
+      "to_file": "server/worktree-tracker.ts",
+      "to_func": "save"
+    },
+    {
+      "from_file": "server/env-manager.ts",
+      "from_func": "updateEnv",
+      "to_file": "server/env-manager.ts",
+      "to_func": "getEnv"
+    },
+    {
+      "from_file": "server/auto-namer.ts",
+      "from_func": "generateSessionTitle",
+      "to_file": "server/auto-namer.ts",
+      "to_func": "extractTextContent"
+    },
+    {
+      "from_file": "server/container-manager.ts",
+      "from_func": "ContainerManager.imageExists",
+      "to_file": "server/container-manager.ts",
+      "to_func": "shellEscape"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/session-names.ts",
+      "to_func": "getAllNames"
+    },
+    {
+      "from_file": "server/auto-namer.ts",
+      "from_func": "generateSessionTitle",
+      "to_file": "server/auto-namer.ts",
+      "to_func": "sanitizeTitle"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleNotification",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "handleTokenUsageUpdated"
+    },
+    {
+      "from_file": "server/update-checker.ts",
+      "from_func": "isUpdateAvailable",
+      "to_file": "server/update-checker.ts",
+      "to_func": "isNewerVersion"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleInterrupt",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "sendToCLI"
+    },
+    {
+      "from_file": "src/components/HomePage.tsx",
+      "from_func": "doCreateSession",
+      "to_file": "src/utils/recent-dirs.ts",
+      "to_func": "addRecentDir"
+    },
+    {
+      "from_file": "server/env-manager.ts",
+      "from_func": "listEnvs",
+      "to_file": "server/env-manager.ts",
+      "to_func": "ensureDir"
+    },
+    {
+      "from_file": "server/env-manager.ts",
+      "from_func": "getEnv",
+      "to_file": "server/env-manager.ts",
+      "to_func": "filePath"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleItemCompleted",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "ensureToolUseEmitted"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.routeCLIMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "handleAssistantMessage"
+    },
+    {
+      "from_file": "server/usage-limits.test.ts",
+      "from_func": "makeCredentialsHex",
+      "to_file": "server/usage-limits.test.ts",
+      "to_func": "makeCredentialsJson"
+    },
+    {
+      "from_file": "src/components/MessageFeed.tsx",
+      "from_func": "groupMessages",
+      "to_file": "src/components/MessageFeed.tsx",
+      "to_func": "groupToolMessages"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "uninstall",
+      "to_file": "server/service.ts",
+      "to_func": "isDarwin"
+    },
+    {
+      "from_file": "src/components/Composer.tsx",
+      "from_func": "handleSend",
+      "to_file": "src/ws.ts",
+      "to_func": "sendToSession"
+    },
+    {
+      "from_file": "server/github-pr.ts",
+      "from_func": "fetchPRInfoAsync",
+      "to_file": "server/github-pr.ts",
+      "to_func": "isGhAvailable"
+    },
+    {
+      "from_file": "server/terminal-manager.ts",
+      "from_func": "TerminalManager.spawn",
+      "to_file": "server/terminal-manager.ts",
+      "to_func": "kill"
+    },
+    {
+      "from_file": "src/components/HomePage.tsx",
+      "from_func": "handlePaste",
+      "to_file": "src/components/HomePage.tsx",
+      "to_func": "readFileAsBase64"
+    },
+    {
+      "from_file": "server/update-checker.ts",
+      "from_func": "startPeriodicCheck",
+      "to_file": "server/update-checker.ts",
+      "to_func": "checkForUpdate"
+    },
+    {
+      "from_file": "src/components/HomePage.tsx",
+      "from_func": "doCreateSession",
+      "to_file": "src/utils/names.ts",
+      "to_func": "generateUniqueSessionName"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.ensureToolUseEmitted",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emitToolUseTracked"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.routeBrowserMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "handleSetModel"
+    },
+    {
+      "from_file": "server/terminal-manager.ts",
+      "from_func": "TerminalManager.spawn",
+      "to_file": "server/terminal-manager.ts",
+      "to_func": "resolveShell"
+    },
+    {
+      "from_file": "server/container-manager.ts",
+      "from_func": "ContainerManager.restoreContainer",
+      "to_file": "server/container-manager.ts",
+      "to_func": "exec"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "restartDarwin",
+      "to_file": "server/service.ts",
+      "to_func": "unloadLaunchdService"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleTokenUsageUpdated",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emit"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.initialize",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "sessionMetaCb"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "JsonRpcTransport.notify",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "writeRaw"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleNotification",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "updateRateLimits"
+    },
+    {
+      "from_file": "server/session-store.ts",
+      "from_func": "SessionStore.save",
+      "to_file": "server/session-store.ts",
+      "to_func": "saveSync"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.attachCodexAdapter",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "getOrCreateSession"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.constructor",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "handleRequest"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleControlRequest",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "broadcastToBrowsers"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/env-manager.ts",
+      "to_func": "createEnv"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.dispatchOutgoing",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "handleOutgoingUserMessage"
+    },
+    {
+      "from_file": "server/env-manager.ts",
+      "from_func": "updateEnv",
+      "to_file": "server/env-manager.ts",
+      "to_func": "ensureDir"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.attachCodexAdapter",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "onFirstTurnCompleted"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.initialize",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "dispatchOutgoing"
+    },
+    {
+      "from_file": "server/settings-manager.ts",
+      "from_func": "getSettings",
+      "to_file": "server/settings-manager.ts",
+      "to_func": "ensureLoaded"
+    },
+    {
+      "from_file": "server/worktree-tracker.test.ts",
+      "from_func": "readTrackerFile",
+      "to_file": "server/worktree-tracker.test.ts",
+      "to_func": "trackerFilePath"
+    },
+    {
+      "from_file": "server/session-names.ts",
+      "from_func": "getName",
+      "to_file": "server/session-names.ts",
+      "to_func": "ensureLoaded"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.routeBrowserMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "handleSetPermissionMode"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.routeCLIMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "handleResultMessage"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "statusDarwin",
+      "to_file": "server/service.ts",
+      "to_func": "getInstalledLaunchdService"
+    },
+    {
+      "from_file": "server/session-store.ts",
+      "from_func": "SessionStore.setArchived",
+      "to_file": "server/session-store.ts",
+      "to_func": "saveSync"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "JsonRpcTransport.dispatch",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "notificationHandler"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleItemCompleted",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "makeMessageId"
+    },
+    {
+      "from_file": "server/auto-namer.ts",
+      "from_func": "generateSessionTitle",
+      "to_file": "server/settings-manager.ts",
+      "to_func": "getSettings"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.emitToolResult",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emit"
+    },
+    {
+      "from_file": "src/components/HomePage.tsx",
+      "from_func": "doCreateSession",
+      "to_file": "src/ws.ts",
+      "to_func": "connectSession"
+    },
+    {
+      "from_file": "src/ws.ts",
+      "from_func": "handleMessage",
+      "to_file": "src/utils/names.ts",
+      "to_func": "generateUniqueSessionName"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.routeBrowserMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "handleUserMessage"
+    },
+    {
+      "from_file": "server/session-store.ts",
+      "from_func": "SessionStore.remove",
+      "to_file": "server/session-store.ts",
+      "to_func": "filePath"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "restartLinux",
+      "to_file": "server/service.ts",
+      "to_func": "systemctlUser"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "stop",
+      "to_file": "server/service.ts",
+      "to_func": "stopLinux"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleResultMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "persistSession"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.initialize",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emit"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "stopLinux",
+      "to_file": "server/service.ts",
+      "to_func": "systemctlUser"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/git-utils.ts",
+      "to_func": "listBranches"
+    },
+    {
+      "from_file": "server/container-manager.ts",
+      "from_func": "ContainerManager.getDockerVersion",
+      "to_file": "server/container-manager.ts",
+      "to_func": "exec"
+    },
+    {
+      "from_file": "server/usage-limits.ts",
+      "from_func": "getCredentials",
+      "to_file": "server/usage-limits.ts",
+      "to_func": "readRawCredentials"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "statusLinux",
+      "to_file": "server/service.ts",
+      "to_func": "isSystemdUnitInstalled"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "stop",
+      "to_file": "server/service.ts",
+      "to_func": "isDarwin"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.emitToolUseTracked",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emitToolUse"
+    },
+    {
+      "from_file": "src/utils/project-grouping.ts",
+      "from_func": "groupSessionsByProject",
+      "to_file": "src/utils/project-grouping.ts",
+      "to_func": "extractProjectKey"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleRequest",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "handleMcpToolCallApproval"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.initialize",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "mapSandboxPolicy"
+    },
+    {
+      "from_file": "server/cli-launcher.ts",
+      "from_func": "CliLauncher.relaunch",
+      "to_file": "server/cli-launcher.ts",
+      "to_func": "spawnCodex"
+    },
+    {
+      "from_file": "src/components/Composer.test.tsx",
+      "from_func": "setupMockStore",
+      "to_file": "src/components/Composer.test.tsx",
+      "to_func": "makeSession"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleFileChangeApproval",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emit"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "isRunningAsService",
+      "to_file": "server/service.ts",
+      "to_func": "systemctlUser"
+    },
+    {
+      "from_file": "server/github-pr.ts",
+      "from_func": "fetchPRInfoAsync",
+      "to_file": "server/github-pr.ts",
+      "to_func": "computeAdaptiveTTL"
+    },
+    {
+      "from_file": "src/components/HomePage.tsx",
+      "from_func": "handleSkipPull",
+      "to_file": "src/components/HomePage.tsx",
+      "to_func": "doCreateSession"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "migrateLegacyInstallIfNeeded",
+      "to_file": "server/service.ts",
+      "to_func": "unloadLaunchdService"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/update-checker.ts",
+      "to_func": "checkForUpdate"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.routeBrowserMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "handlePermissionResponse"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "stopDarwin",
+      "to_file": "server/service.ts",
+      "to_func": "getInstalledLaunchdService"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.attachCodexAdapter",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "onCLISessionId"
+    },
+    {
+      "from_file": "server/cli-launcher.ts",
+      "from_func": "CliLauncher.kill",
+      "to_file": "server/cli-launcher.ts",
+      "to_func": "persistState"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "install",
+      "to_file": "server/service.ts",
+      "to_func": "installDarwin"
+    },
+    {
+      "from_file": "server/update-checker.ts",
+      "from_func": "checkForUpdate",
+      "to_file": "server/update-checker.ts",
+      "to_func": "isUpdateAvailable"
+    },
+    {
+      "from_file": "server/settings-manager.ts",
+      "from_func": "updateSettings",
+      "to_file": "server/settings-manager.ts",
+      "to_func": "ensureLoaded"
+    },
+    {
+      "from_file": "server/pr-poller.ts",
+      "from_func": "PRPoller.fetchAndBroadcast",
+      "to_file": "server/pr-poller.ts",
+      "to_func": "fetchAndBroadcast"
+    },
+    {
+      "from_file": "src/ws.ts",
+      "from_func": "disconnectAll",
+      "to_file": "src/ws.ts",
+      "to_func": "disconnectSession"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/git-utils.ts",
+      "to_func": "removeWorktree"
+    },
+    {
+      "from_file": "src/ws.ts",
+      "from_func": "extractChangedFilesFromBlocks",
+      "to_file": "src/ws.ts",
+      "to_func": "resolveSessionFilePath"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.emitToolUseStart",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emit"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "ensureWorktree",
+      "to_file": "server/git-utils.ts",
+      "to_func": "worktreeDir"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "JsonRpcTransport.readStdout",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "processBuffer"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleExecCommandApproval",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emit"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/update-checker.ts",
+      "to_func": "isUpdateAvailable"
+    },
+    {
+      "from_file": "src/components/PermissionBanner.tsx",
+      "from_func": "handleAllow",
+      "to_file": "src/components/PermissionBanner.tsx",
+      "to_func": "removePermission"
+    },
+    {
+      "from_file": "src/components/EnvManager.tsx",
+      "from_func": "saveEdit",
+      "to_file": "src/components/EnvManager.tsx",
+      "to_func": "refresh"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "JsonRpcTransport.processBuffer",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "dispatch"
+    },
+    {
+      "from_file": "src/components/TerminalView.tsx",
+      "from_func": "TerminalView",
+      "to_file": "src/terminal-ws.ts",
+      "to_func": "disconnectTerminal"
+    },
+    {
+      "from_file": "src/components/Composer.tsx",
+      "from_func": "toggleMode",
+      "to_file": "src/ws.ts",
+      "to_func": "sendToSession"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "listWorktrees",
+      "to_file": "server/git-utils.ts",
+      "to_func": "isWorktreeDirty"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.initialize",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "mapApprovalPolicy"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleDynamicToolCall",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emitToolResult"
+    },
+    {
+      "from_file": "src/components/HomePage.tsx",
+      "from_func": "handleFileSelect",
+      "to_file": "src/components/HomePage.tsx",
+      "to_func": "readFileAsBase64"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleItemCompleted",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "safeKind"
+    },
+    {
+      "from_file": "src/components/Composer.tsx",
+      "from_func": "handleInterrupt",
+      "to_file": "src/ws.ts",
+      "to_func": "sendToSession"
+    },
+    {
+      "from_file": "server/cli-launcher.ts",
+      "from_func": "CliLauncher.killAll",
+      "to_file": "server/cli-launcher.ts",
+      "to_func": "kill"
+    },
+    {
+      "from_file": "server/container-manager.ts",
+      "from_func": "ContainerManager.restoreContainer",
+      "to_file": "server/container-manager.ts",
+      "to_func": "shellEscape"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "restartDarwin",
+      "to_file": "server/service.ts",
+      "to_func": "getInstalledLaunchdService"
+    },
+    {
+      "from_file": "server/container-manager.ts",
+      "from_func": "ContainerManager.cleanupAll",
+      "to_file": "server/container-manager.ts",
+      "to_func": "removeContainer"
+    },
+    {
+      "from_file": "server/cli-launcher.ts",
+      "from_func": "CliLauncher.spawnCLI",
+      "to_file": "server/cli-launcher.ts",
+      "to_func": "persistState"
+    },
+    {
+      "from_file": "server/container-manager.ts",
+      "from_func": "ContainerManager.buildImage",
+      "to_file": "server/container-manager.ts",
+      "to_func": "exec"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/settings-manager.ts",
+      "to_func": "getSettings"
+    },
+    {
+      "from_file": "server/cli-launcher.ts",
+      "from_func": "CliLauncher.launch",
+      "to_file": "server/cli-launcher.ts",
+      "to_func": "spawnCodex"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.routeCLIMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "handleToolProgress"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.routeBrowserMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "handleInterrupt"
+    },
+    {
+      "from_file": "src/components/HomePage.tsx",
+      "from_func": "doCreateSession",
+      "to_file": "src/ws.ts",
+      "to_func": "waitForConnection"
+    },
+    {
+      "from_file": "server/env-manager.ts",
+      "from_func": "deleteEnv",
+      "to_file": "server/env-manager.ts",
+      "to_func": "filePath"
+    },
+    {
+      "from_file": "src/components/Composer.tsx",
+      "from_func": "handleKeyDown",
+      "to_file": "src/components/Composer.tsx",
+      "to_func": "selectCommand"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "restartLinux",
+      "to_file": "server/service.ts",
+      "to_func": "isSystemdUnitInstalled"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/routes.ts",
+      "to_func": "buildTree"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.broadcastNameUpdate",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "broadcastToBrowsers"
+    },
+    {
+      "from_file": "src/ws.ts",
+      "from_func": "connectAllSessions",
+      "to_file": "src/ws.ts",
+      "to_func": "connectSession"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.constructor",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "disconnectCb"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.initialize",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "updateRateLimits"
+    },
+    {
+      "from_file": "server/pr-poller.ts",
+      "from_func": "PRPoller.unwatch",
+      "to_file": "server/pr-poller.ts",
+      "to_func": "unwatchKey"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleItemCompleted",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emit"
+    },
+    {
+      "from_file": "server/github-pr.ts",
+      "from_func": "fetchPRInfo",
+      "to_file": "server/github-pr.ts",
+      "to_func": "computeAdaptiveTTL"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/routes.ts",
+      "to_func": "execCaptureStdout"
+    },
+    {
+      "from_file": "src/ws.ts",
+      "from_func": "extractTasksFromBlocks",
+      "to_file": "src/ws.ts",
+      "to_func": "getProcessedSet"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleSystemMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "resolveGitInfo"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.broadcastToSession",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "broadcastToBrowsers"
+    },
+    {
+      "from_file": "src/components/TerminalView.tsx",
+      "from_func": "TerminalView",
+      "to_file": "src/components/TerminalView.tsx",
+      "to_func": "getTerminalTheme"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/routes.ts",
+      "to_func": "cleanupWorktree"
+    },
+    {
+      "from_file": "server/env-manager.ts",
+      "from_func": "getEnv",
+      "to_file": "server/env-manager.ts",
+      "to_func": "ensureDir"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleResultMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "broadcastToBrowsers"
+    },
+    {
+      "from_file": "server/settings-manager.ts",
+      "from_func": "ensureLoaded",
+      "to_file": "server/settings-manager.ts",
+      "to_func": "normalize"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "isRunningAsService",
+      "to_file": "server/service.ts",
+      "to_func": "isSystemdUnitInstalled"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "checkoutBranch",
+      "to_file": "server/git-utils.ts",
+      "to_func": "git"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.dispatchOutgoing",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "handleOutgoingInterrupt"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "installLinux",
+      "to_file": "server/service.ts",
+      "to_func": "isSystemdUnitInstalled"
+    },
+    {
+      "from_file": "src/utils/names.ts",
+      "from_func": "generateUniqueSessionName",
+      "to_file": "src/utils/names.ts",
+      "to_func": "generateSessionName"
+    },
+    {
+      "from_file": "src/ws.ts",
+      "from_func": "handleMessage",
+      "to_file": "src/ws.ts",
+      "to_func": "nextId"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.initialize",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "initErrorCb"
+    },
+    {
+      "from_file": "src/ws.ts",
+      "from_func": "extractChangedFilesFromBlocks",
+      "to_file": "src/ws.ts",
+      "to_func": "isPathInSessionScope"
+    },
+    {
+      "from_file": "src/components/FolderPicker.tsx",
+      "from_func": "selectDir",
+      "to_file": "src/utils/recent-dirs.ts",
+      "to_func": "addRecentDir"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.emit",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "browserMessageCb"
+    },
+    {
+      "from_file": "src/ws.ts",
+      "from_func": "connectSession",
+      "to_file": "src/ws.ts",
+      "to_func": "handleMessage"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "cleanupWorktree",
+      "to_file": "server/git-utils.ts",
+      "to_func": "isWorktreeDirty"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "getRepoInfo",
+      "to_file": "server/git-utils.ts",
+      "to_func": "gitSafe"
+    },
+    {
+      "from_file": "server/usage-limits.ts",
+      "from_func": "getUsageLimits",
+      "to_file": "server/usage-limits.ts",
+      "to_func": "fetchUsageLimits"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleAssistantMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "persistSession"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/git-utils.ts",
+      "to_func": "getRepoInfo"
+    },
+    {
+      "from_file": "src/components/Composer.tsx",
+      "from_func": "handleKeyDown",
+      "to_file": "src/components/Composer.tsx",
+      "to_func": "handleSend"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleCLIClose",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "broadcastToBrowsers"
+    },
+    {
+      "from_file": "src/components/MessageFeed.tsx",
+      "from_func": "buildEntries",
+      "to_file": "src/components/MessageFeed.tsx",
+      "to_func": "groupToolMessages"
+    },
+    {
+      "from_file": "src/components/EnvManager.tsx",
+      "from_func": "handleCreate",
+      "to_file": "src/components/EnvManager.tsx",
+      "to_func": "refresh"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleToolProgress",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "broadcastToBrowsers"
+    },
+    {
+      "from_file": "server/cli-launcher.ts",
+      "from_func": "CliLauncher.spawnCodex",
+      "to_file": "server/cli-launcher.ts",
+      "to_func": "persistState"
+    },
+    {
+      "from_file": "src/terminal-ws.ts",
+      "from_func": "connectTerminal",
+      "to_file": "src/terminal-ws.ts",
+      "to_func": "onDataCallback"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "restart",
+      "to_file": "server/service.ts",
+      "to_func": "restartLinux"
+    },
+    {
+      "from_file": "server/worktree-tracker.ts",
+      "from_func": "WorktreeTracker.removeBySession",
+      "to_file": "server/worktree-tracker.ts",
+      "to_func": "save"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "ensureWorktree",
+      "to_file": "server/git-utils.ts",
+      "to_func": "listWorktrees"
+    },
+    {
+      "from_file": "server/container-manager.ts",
+      "from_func": "ContainerManager.createContainer",
+      "to_file": "server/container-manager.ts",
+      "to_func": "exec"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleRequest",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "handleExecCommandApproval"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleMcpToolCallApproval",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emit"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleRequest",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "handleCommandApproval"
+    },
+    {
+      "from_file": "src/components/MessageFeed.tsx",
+      "from_func": "groupMessages",
+      "to_file": "src/components/MessageFeed.tsx",
+      "to_func": "buildEntries"
+    },
+    {
+      "from_file": "src/ws.ts",
+      "from_func": "isPathInSessionScope",
+      "to_file": "src/ws.ts",
+      "to_func": "normalizePath"
+    },
+    {
+      "from_file": "server/cli-launcher.ts",
+      "from_func": "CliLauncher.markConnected",
+      "to_file": "server/cli-launcher.ts",
+      "to_func": "persistState"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.attachCodexAdapter",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "resolveGitInfo"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/git-utils.ts",
+      "to_func": "ensureWorktree"
+    },
+    {
+      "from_file": "server/cli-launcher.ts",
+      "from_func": "CliLauncher.relaunch",
+      "to_file": "server/cli-launcher.ts",
+      "to_func": "spawnCLI"
+    },
+    {
+      "from_file": "src/components/TerminalView.tsx",
+      "from_func": "TerminalView",
+      "to_file": "src/terminal-ws.ts",
+      "to_func": "sendTerminalInput"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "migrateLegacyInstallIfNeeded",
+      "to_file": "server/service.ts",
+      "to_func": "removePlist"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleNotification",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "handleAgentMessageDelta"
+    },
+    {
+      "from_file": "src/components/DiffViewer.tsx",
+      "from_func": "parseUnifiedDiffToHunks",
+      "to_file": "src/components/DiffViewer.tsx",
+      "to_func": "addWordHighlights"
+    },
+    {
+      "from_file": "src/components/HomePage.tsx",
+      "from_func": "switchBackend",
+      "to_file": "src/utils/backends.ts",
+      "to_func": "getDefaultModel"
+    },
+    {
+      "from_file": "server/pr-poller.ts",
+      "from_func": "PRPoller.watch",
+      "to_file": "server/pr-poller.ts",
+      "to_func": "fetchAndBroadcast"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "gitFetch",
+      "to_file": "server/git-utils.ts",
+      "to_func": "git"
+    },
+    {
+      "from_file": "server/pr-poller.ts",
+      "from_func": "PRPoller.watch",
+      "to_file": "server/pr-poller.ts",
+      "to_func": "unwatchKey"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleItemStarted",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "makeMessageId"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.routeCLIMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "handleStreamEvent"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleCLIOpen",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "broadcastToBrowsers"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/env-manager.ts",
+      "to_func": "deleteEnv"
+    },
+    {
+      "from_file": "src/components/HomePage.tsx",
+      "from_func": "doCreateSession",
+      "to_file": "src/ws.ts",
+      "to_func": "sendToSession"
+    },
+    {
+      "from_file": "src/components/HomePage.tsx",
+      "from_func": "handlePullAndContinue",
+      "to_file": "src/components/HomePage.tsx",
+      "to_func": "doCreateSession"
+    },
+    {
+      "from_file": "src/components/HomePage.tsx",
+      "from_func": "handleKeyDown",
+      "to_file": "src/utils/backends.ts",
+      "to_func": "getModesForBackend"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleRequest",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "handleApplyPatchApproval"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleSystemMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "persistSession"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "installDarwin",
+      "to_file": "server/service.ts",
+      "to_func": "resolveBinPath"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.routeBrowserMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "persistSession"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleApplyPatchApproval",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emit"
+    },
+    {
+      "from_file": "server/container-manager.ts",
+      "from_func": "ContainerManager.removeContainer",
+      "to_file": "server/container-manager.ts",
+      "to_func": "exec"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "uninstallLinux",
+      "to_file": "server/service.ts",
+      "to_func": "isSystemdUnitInstalled"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/git-utils.ts",
+      "to_func": "listWorktrees"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "isRunningAsService",
+      "to_file": "server/service.ts",
+      "to_func": "getInstalledLaunchdService"
+    },
+    {
+      "from_file": "src/components/MessageFeed.tsx",
+      "from_func": "buildEntries",
+      "to_file": "src/components/MessageFeed.tsx",
+      "to_func": "getTaskIdsFromEntry"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "listBranches",
+      "to_file": "server/git-utils.ts",
+      "to_func": "listWorktrees"
+    },
+    {
+      "from_file": "server/container-manager.ts",
+      "from_func": "ContainerManager.checkDocker",
+      "to_file": "server/container-manager.ts",
+      "to_func": "exec"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/usage-limits.ts",
+      "to_func": "getUsageLimits"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/routes.ts",
+      "to_func": "mapLimit"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "status",
+      "to_file": "server/service.ts",
+      "to_func": "isDarwin"
+    },
+    {
+      "from_file": "server/usage-limits.ts",
+      "from_func": "getValidAccessToken",
+      "to_file": "server/usage-limits.ts",
+      "to_func": "writeCredentials"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "restart",
+      "to_file": "server/service.ts",
+      "to_func": "ensureSupportedPlatform"
+    },
+    {
+      "from_file": "server/terminal-manager.ts",
+      "from_func": "TerminalManager.removeBrowserSocket",
+      "to_file": "server/terminal-manager.ts",
+      "to_func": "kill"
+    },
+    {
+      "from_file": "src/components/TerminalView.tsx",
+      "from_func": "TerminalView",
+      "to_file": "src/terminal-ws.ts",
+      "to_func": "sendTerminalResize"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "JsonRpcTransport.dispatch",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "requestHandler"
+    },
+    {
+      "from_file": "src/components/HomePage.tsx",
+      "from_func": "switchBackend",
+      "to_file": "src/utils/backends.ts",
+      "to_func": "getDefaultMode"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleUserInputRequest",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emit"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleAgentMessageDelta",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emit"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.constructor",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "handleNotification"
+    },
+    {
+      "from_file": "server/ws-bridge.test.ts",
+      "from_func": "makeCliSocket",
+      "to_file": "server/ws-bridge.test.ts",
+      "to_func": "createMockSocket"
+    },
+    {
+      "from_file": "server/env-manager.ts",
+      "from_func": "createEnv",
+      "to_file": "server/env-manager.ts",
+      "to_func": "filePath"
+    },
+    {
+      "from_file": "server/settings-manager.ts",
+      "from_func": "_resetForTest",
+      "to_file": "server/settings-manager.ts",
+      "to_func": "normalize"
+    },
+    {
+      "from_file": "server/usage-limits.ts",
+      "from_func": "getUsageLimits",
+      "to_file": "server/usage-limits.ts",
+      "to_func": "getValidAccessToken"
+    },
+    {
+      "from_file": "server/pr-poller.ts",
+      "from_func": "PRPoller.fetchAndBroadcast",
+      "to_file": "server/github-pr.ts",
+      "to_func": "computeAdaptiveTTL"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "isWorktreeDirty",
+      "to_file": "server/git-utils.ts",
+      "to_func": "gitSafe"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleStreamEvent",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "broadcastToBrowsers"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "buildTree",
+      "to_file": "server/routes.ts",
+      "to_func": "buildTree"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.getOrCreateSession",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "makeDefaultState"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "isRunningAsService",
+      "to_file": "server/service.ts",
+      "to_func": "isLinux"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "removeWorktree",
+      "to_file": "server/git-utils.ts",
+      "to_func": "gitSafe"
+    },
+    {
+      "from_file": "server/session-names.ts",
+      "from_func": "setName",
+      "to_file": "server/session-names.ts",
+      "to_func": "persist"
+    },
+    {
+      "from_file": "src/components/PermissionBanner.tsx",
+      "from_func": "handleAllow",
+      "to_file": "src/ws.ts",
+      "to_func": "sendToSession"
+    },
+    {
+      "from_file": "server/ws-bridge.test.ts",
+      "from_func": "makeBrowserSocket",
+      "to_file": "server/ws-bridge.test.ts",
+      "to_func": "createMockSocket"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleItemStarted",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emitToolUseStart"
+    },
+    {
+      "from_file": "server/container-manager.ts",
+      "from_func": "ContainerManager.buildImage",
+      "to_file": "server/container-manager.ts",
+      "to_func": "shellEscape"
+    },
+    {
+      "from_file": "server/cli-launcher.ts",
+      "from_func": "CliLauncher.launch",
+      "to_file": "server/cli-launcher.ts",
+      "to_func": "spawnCLI"
+    },
+    {
+      "from_file": "server/container-manager.ts",
+      "from_func": "ContainerManager.resolvePortMappings",
+      "to_file": "server/container-manager.ts",
+      "to_func": "shellEscape"
+    },
+    {
+      "from_file": "src/components/Sidebar.tsx",
+      "from_func": "poll",
+      "to_file": "src/ws.ts",
+      "to_func": "connectAllSessions"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "installDarwin",
+      "to_file": "server/service.ts",
+      "to_func": "migrateLegacyInstallIfNeeded"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleBrowserMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "routeBrowserMessage"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.attachCodexAdapter",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "persistSession"
+    },
+    {
+      "from_file": "src/components/TerminalView.tsx",
+      "from_func": "TerminalView",
+      "to_file": "src/terminal-ws.ts",
+      "to_func": "connectTerminal"
+    },
+    {
+      "from_file": "server/usage-limits.ts",
+      "from_func": "getValidAccessToken",
+      "to_file": "server/usage-limits.ts",
+      "to_func": "refreshAccessToken"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleAssistantMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "broadcastToBrowsers"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.constructor",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "initialize"
+    },
+    {
+      "from_file": "src/utils/notification-sound.ts",
+      "from_func": "playNotificationSound",
+      "to_file": "src/utils/notification-sound.ts",
+      "to_func": "getAudioContext"
+    },
+    {
+      "from_file": "server/pr-poller.ts",
+      "from_func": "PRPoller.fetchAndBroadcast",
+      "to_file": "server/github-pr.ts",
+      "to_func": "fetchPRInfoAsync"
+    },
+    {
+      "from_file": "server/session-store.ts",
+      "from_func": "SessionStore.load",
+      "to_file": "server/session-store.ts",
+      "to_func": "filePath"
+    },
+    {
+      "from_file": "server/session-names.ts",
+      "from_func": "getAllNames",
+      "to_file": "server/session-names.ts",
+      "to_func": "ensureLoaded"
+    },
+    {
+      "from_file": "server/container-manager.ts",
+      "from_func": "ContainerManager.createContainer",
+      "to_file": "server/container-manager.ts",
+      "to_func": "resolvePortMappings"
+    },
+    {
+      "from_file": "src/utils/backends.ts",
+      "from_func": "toModelOptions",
+      "to_file": "src/utils/backends.ts",
+      "to_func": "pickIcon"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleItemStarted",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "safeKind"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleNotification",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "handleItemStarted"
+    },
+    {
+      "from_file": "src/ws.ts",
+      "from_func": "resolveSessionFilePath",
+      "to_file": "src/ws.ts",
+      "to_func": "normalizePath"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "resolveDefaultBranch",
+      "to_file": "server/git-utils.ts",
+      "to_func": "gitSafe"
+    },
+    {
+      "from_file": "server/terminal-manager.ts",
+      "from_func": "TerminalManager.handleBrowserMessage",
+      "to_file": "server/terminal-manager.ts",
+      "to_func": "resize"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "isRunningAsService",
+      "to_file": "server/service.ts",
+      "to_func": "isDarwin"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "getRepoInfo",
+      "to_file": "server/git-utils.ts",
+      "to_func": "resolveDefaultBranch"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleItemCompleted",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emitToolResult"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.routeCLIMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "handleControlRequest"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "install",
+      "to_file": "server/service.ts",
+      "to_func": "ensureSupportedPlatform"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "uninstallDarwin",
+      "to_file": "server/service.ts",
+      "to_func": "removePlist"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "cleanupWorktree",
+      "to_file": "server/git-utils.ts",
+      "to_func": "removeWorktree"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "ensureWorktree",
+      "to_file": "server/git-utils.ts",
+      "to_func": "gitSafe"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleAuthStatus",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "broadcastToBrowsers"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleDynamicToolCall",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emitToolUseTracked"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "status",
+      "to_file": "server/service.ts",
+      "to_func": "statusDarwin"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleItemStarted",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emit"
+    },
+    {
+      "from_file": "server/github-pr.ts",
+      "from_func": "fetchPRInfo",
+      "to_file": "server/github-pr.ts",
+      "to_func": "getRepoSlug"
+    },
+    {
+      "from_file": "server/container-manager.ts",
+      "from_func": "ContainerManager.createContainer",
+      "to_file": "server/container-manager.ts",
+      "to_func": "shellEscape"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleUserMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "persistSession"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "stopLinux",
+      "to_file": "server/service.ts",
+      "to_func": "isSystemdUnitInstalled"
+    },
+    {
+      "from_file": "src/components/Composer.tsx",
+      "from_func": "handleKeyDown",
+      "to_file": "src/components/Composer.tsx",
+      "to_func": "toggleMode"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleSystemMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "broadcastToBrowsers"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.sendBrowserMessage",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "dispatchOutgoing"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleRequest",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "handleUserInputRequest"
+    },
+    {
+      "from_file": "src/utils/recent-dirs.ts",
+      "from_func": "addRecentDir",
+      "to_file": "src/utils/recent-dirs.ts",
+      "to_func": "getRecentDirs"
+    },
+    {
+      "from_file": "src/components/DiffViewer.tsx",
+      "from_func": "parsePatchToHunks",
+      "to_file": "src/components/DiffViewer.tsx",
+      "to_func": "addWordHighlights"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleBrowserOpen",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "sendToBrowser"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleOutgoingUserMessage",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emit"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "stopDarwin",
+      "to_file": "server/service.ts",
+      "to_func": "unloadLaunchdService"
+    },
+    {
+      "from_file": "server/env-manager.ts",
+      "from_func": "createEnv",
+      "to_file": "server/env-manager.ts",
+      "to_func": "slugify"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "uninstall",
+      "to_file": "server/service.ts",
+      "to_func": "uninstallLinux"
+    },
+    {
+      "from_file": "server/github-pr.ts",
+      "from_func": "fetchPRInfoAsync",
+      "to_file": "server/github-pr.ts",
+      "to_func": "parseGraphQLResponse"
+    },
+    {
+      "from_file": "src/terminal-ws.ts",
+      "from_func": "connectTerminal",
+      "to_file": "src/terminal-ws.ts",
+      "to_func": "onErrorCallback"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "listBranches",
+      "to_file": "server/git-utils.ts",
+      "to_func": "getBranchStatus"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "JsonRpcTransport.respond",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "writeRaw"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleBrowserOpen",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "getOrCreateSession"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.routeCLIMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "handleSystemMessage"
+    },
+    {
+      "from_file": "src/components/HomePage.tsx",
+      "from_func": "doCreateSession",
+      "to_file": "src/ws.ts",
+      "to_func": "disconnectSession"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/env-manager.ts",
+      "to_func": "updateEnv"
+    },
+    {
+      "from_file": "server/session-names.ts",
+      "from_func": "removeName",
+      "to_file": "server/session-names.ts",
+      "to_func": "ensureLoaded"
+    },
+    {
+      "from_file": "src/ws.ts",
+      "from_func": "handleMessage",
+      "to_file": "src/ws.ts",
+      "to_func": "extractTextFromBlocks"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.routeCLIMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "handleAuthStatus"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "generateUniqueWorktreeBranch",
+      "to_file": "server/git-utils.ts",
+      "to_func": "gitSafe"
+    },
+    {
+      "from_file": "src/terminal-ws.ts",
+      "from_func": "connectTerminal",
+      "to_file": "src/terminal-ws.ts",
+      "to_func": "disconnectTerminal"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "listBranches",
+      "to_file": "server/git-utils.ts",
+      "to_func": "gitSafe"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleToolUseSummary",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "broadcastToBrowsers"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "ensureWorktree",
+      "to_file": "server/git-utils.ts",
+      "to_func": "generateUniqueWorktreeBranch"
+    },
+    {
+      "from_file": "server/session-names.ts",
+      "from_func": "removeName",
+      "to_file": "server/session-names.ts",
+      "to_func": "persist"
+    },
+    {
+      "from_file": "server/container-manager.ts",
+      "from_func": "ContainerManager.removeContainer",
+      "to_file": "server/container-manager.ts",
+      "to_func": "shellEscape"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/settings-manager.ts",
+      "to_func": "updateSettings"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "uninstall",
+      "to_file": "server/service.ts",
+      "to_func": "uninstallDarwin"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "statusLinux",
+      "to_file": "server/service.ts",
+      "to_func": "systemctlUser"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "uninstallDarwin",
+      "to_file": "server/service.ts",
+      "to_func": "unloadLaunchdService"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/git-utils.ts",
+      "to_func": "gitPull"
+    },
+    {
+      "from_file": "src/ws.ts",
+      "from_func": "scheduleReconnect",
+      "to_file": "src/ws.ts",
+      "to_func": "connectSession"
+    },
+    {
+      "from_file": "src/components/PermissionBanner.tsx",
+      "from_func": "handleDeny",
+      "to_file": "src/ws.ts",
+      "to_func": "sendToSession"
+    },
+    {
+      "from_file": "src/components/Sidebar.tsx",
+      "from_func": "handleSelectSession",
+      "to_file": "src/ws.ts",
+      "to_func": "connectSession"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleNotification",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "handleItemUpdated"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/env-manager.ts",
+      "to_func": "listEnvs"
+    },
+    {
+      "from_file": "src/components/Composer.tsx",
+      "from_func": "handlePaste",
+      "to_file": "src/components/Composer.tsx",
+      "to_func": "readFileAsBase64"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleResultMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "onFirstTurnCompleted"
+    },
+    {
+      "from_file": "src/components/Composer.tsx",
+      "from_func": "handleFileSelect",
+      "to_file": "src/components/Composer.tsx",
+      "to_func": "readFileAsBase64"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.attachCodexAdapter",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "broadcastToBrowsers"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "restart",
+      "to_file": "server/service.ts",
+      "to_func": "isDarwin"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "stop",
+      "to_file": "server/service.ts",
+      "to_func": "stopDarwin"
+    },
+    {
+      "from_file": "src/ws.ts",
+      "from_func": "handleMessage",
+      "to_file": "src/utils/notification-sound.ts",
+      "to_func": "playNotificationSound"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "installLinux",
+      "to_file": "server/service.ts",
+      "to_func": "generateSystemdUnit"
+    },
+    {
+      "from_file": "server/cli-launcher.ts",
+      "from_func": "CliLauncher.setArchived",
+      "to_file": "server/cli-launcher.ts",
+      "to_func": "persistState"
+    },
+    {
+      "from_file": "src/components/MessageFeed.tsx",
+      "from_func": "buildEntries",
+      "to_file": "src/components/MessageFeed.tsx",
+      "to_func": "buildEntries"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/git-utils.ts",
+      "to_func": "checkoutBranch"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleSetPermissionMode",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "sendToCLI"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleCLIOpen",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "sendToCLI"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "removeWorktree",
+      "to_file": "server/git-utils.ts",
+      "to_func": "git"
+    },
+    {
+      "from_file": "server/container-manager.ts",
+      "from_func": "ContainerManager.imageExists",
+      "to_file": "server/container-manager.ts",
+      "to_func": "exec"
+    },
+    {
+      "from_file": "server/cli-launcher.ts",
+      "from_func": "CliLauncher.setCLISessionId",
+      "to_file": "server/cli-launcher.ts",
+      "to_func": "persistState"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleNotification",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "handleItemCompleted"
+    },
+    {
+      "from_file": "src/components/EnvManager.tsx",
+      "from_func": "handleDelete",
+      "to_file": "src/components/EnvManager.tsx",
+      "to_func": "refresh"
+    },
+    {
+      "from_file": "src/components/HomePage.tsx",
+      "from_func": "handleSend",
+      "to_file": "src/components/HomePage.tsx",
+      "to_func": "doCreateSession"
+    },
+    {
+      "from_file": "server/github-pr.ts",
+      "from_func": "fetchPRInfo",
+      "to_file": "server/github-pr.ts",
+      "to_func": "parseGraphQLResponse"
+    },
+    {
+      "from_file": "server/env-manager.ts",
+      "from_func": "updateEnv",
+      "to_file": "server/env-manager.ts",
+      "to_func": "filePath"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "uninstall",
+      "to_file": "server/service.ts",
+      "to_func": "ensureSupportedPlatform"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.emitToolUse",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "makeMessageId"
+    },
+    {
+      "from_file": "src/ws.ts",
+      "from_func": "handleMessage",
+      "to_file": "src/ws.ts",
+      "to_func": "extractTasksFromBlocks"
+    },
+    {
+      "from_file": "server/github-pr.ts",
+      "from_func": "fetchPRInfoAsync",
+      "to_file": "server/github-pr.ts",
+      "to_func": "getRepoSlugAsync"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleTurnCompleted",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emit"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleSystemMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "onCLISessionId"
+    },
+    {
+      "from_file": "server/env-manager.ts",
+      "from_func": "createEnv",
+      "to_file": "server/env-manager.ts",
+      "to_func": "ensureDir"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleBrowserOpen",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "onGitInfoReady"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleCLIOpen",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "getOrCreateSession"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "removeWorktree",
+      "to_file": "server/git-utils.ts",
+      "to_func": "isWorktreeDirty"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleUserMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "sendToCLI"
+    },
+    {
+      "from_file": "src/components/MessageFeed.tsx",
+      "from_func": "groupToolMessages",
+      "to_file": "src/components/MessageFeed.tsx",
+      "to_func": "getToolOnlyName"
+    },
+    {
+      "from_file": "src/components/PermissionBanner.tsx",
+      "from_func": "handleDeny",
+      "to_file": "src/components/PermissionBanner.tsx",
+      "to_func": "removePermission"
+    },
+    {
+      "from_file": "src/ws.ts",
+      "from_func": "handleMessage",
+      "to_file": "src/ws.ts",
+      "to_func": "extractChangedFilesFromBlocks"
+    },
+    {
+      "from_file": "server/session-names.ts",
+      "from_func": "setName",
+      "to_file": "server/session-names.ts",
+      "to_func": "ensureLoaded"
+    },
+    {
+      "from_file": "server/session-store.ts",
+      "from_func": "SessionStore.setArchived",
+      "to_file": "server/session-store.ts",
+      "to_func": "load"
+    },
+    {
+      "from_file": "src/ws.ts",
+      "from_func": "connectSession",
+      "to_file": "src/ws.ts",
+      "to_func": "scheduleReconnect"
+    },
+    {
+      "from_file": "server/cli-launcher.ts",
+      "from_func": "CliLauncher.removeSession",
+      "to_file": "server/cli-launcher.ts",
+      "to_func": "persistState"
+    },
+    {
+      "from_file": "src/terminal-ws.ts",
+      "from_func": "connectTerminal",
+      "to_file": "src/terminal-ws.ts",
+      "to_func": "onExitCallback"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.restoreFromDisk",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "resolveGitInfo"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleSystemMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "onGitInfoReady"
+    },
+    {
+      "from_file": "src/components/Sidebar.tsx",
+      "from_func": "handleSelectSession",
+      "to_file": "src/components/Sidebar.tsx",
+      "to_func": "setCurrentSession"
+    },
+    {
+      "from_file": "src/components/UpdateBanner.tsx",
+      "from_func": "handleDismiss",
+      "to_file": "src/components/UpdateBanner.tsx",
+      "to_func": "dismissUpdate"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.dispatchOutgoing",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "handleOutgoingPermissionResponse"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleCommandApproval",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emit"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/session-names.ts",
+      "to_func": "setName"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "ensureWorktree",
+      "to_file": "server/git-utils.ts",
+      "to_func": "resolveDefaultBranch"
+    },
+    {
+      "from_file": "server/github-pr.ts",
+      "from_func": "fetchPRInfo",
+      "to_file": "server/github-pr.ts",
+      "to_func": "isGhAvailable"
+    },
+    {
+      "from_file": "server/worktree-tracker.ts",
+      "from_func": "WorktreeTracker.constructor",
+      "to_file": "server/worktree-tracker.ts",
+      "to_func": "load"
+    },
+    {
+      "from_file": "server/cli-launcher.ts",
+      "from_func": "CliLauncher.spawnCodex",
+      "to_file": "server/cli-launcher.ts",
+      "to_func": "onCodexAdapter"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "install",
+      "to_file": "server/service.ts",
+      "to_func": "isDarwin"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "ensureWorktree",
+      "to_file": "server/git-utils.ts",
+      "to_func": "git"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.emitToolUseStart",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emitToolUseTracked"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleNotification",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "handleTurnCompleted"
+    },
+    {
+      "from_file": "server/cli-launcher.ts",
+      "from_func": "CliLauncher.spawnCodex",
+      "to_file": "server/cli-launcher.ts",
+      "to_func": "pipeStream"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleSetModel",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "sendToCLI"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "JsonRpcTransport.call",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "writeRaw"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "installLinux",
+      "to_file": "server/service.ts",
+      "to_func": "systemctlUser"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "gitSafe",
+      "to_file": "server/git-utils.ts",
+      "to_func": "git"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleRequest",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "handleDynamicToolCall"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleNotification",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "handleReasoningDelta"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "install",
+      "to_file": "server/service.ts",
+      "to_func": "installLinux"
+    },
+    {
+      "from_file": "server/routes.ts",
+      "from_func": "createRoutes",
+      "to_file": "server/git-utils.ts",
+      "to_func": "gitFetch"
+    },
+    {
+      "from_file": "server/cli-launcher.ts",
+      "from_func": "CliLauncher.spawnCLI",
+      "to_file": "server/cli-launcher.ts",
+      "to_func": "injectWorktreeGuardrails"
+    },
+    {
+      "from_file": "src/components/HomePage.tsx",
+      "from_func": "doCreateSession",
+      "to_file": "src/components/HomePage.tsx",
+      "to_func": "setCurrentSession"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "status",
+      "to_file": "server/service.ts",
+      "to_func": "ensureSupportedPlatform"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleRequest",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "handleFileChangeApproval"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "status",
+      "to_file": "server/service.ts",
+      "to_func": "statusLinux"
+    },
+    {
+      "from_file": "src/utils/project-grouping.ts",
+      "from_func": "groupSessionsByProject",
+      "to_file": "src/utils/project-grouping.ts",
+      "to_func": "extractProjectLabel"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleControlRequest",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "persistSession"
+    },
+    {
+      "from_file": "server/settings-manager.ts",
+      "from_func": "updateSettings",
+      "to_file": "server/settings-manager.ts",
+      "to_func": "persist"
+    },
+    {
+      "from_file": "server/cli-launcher.ts",
+      "from_func": "CliLauncher.pipeStream",
+      "to_file": "server/cli-launcher.ts",
+      "to_func": "log"
+    },
+    {
+      "from_file": "src/components/HomePage.tsx",
+      "from_func": "handleKeyDown",
+      "to_file": "src/components/HomePage.tsx",
+      "to_func": "handleSend"
+    },
+    {
+      "from_file": "server/ws-bridge.ts",
+      "from_func": "WsBridge.handleCLIMessage",
+      "to_file": "server/ws-bridge.ts",
+      "to_func": "routeCLIMessage"
+    },
+    {
+      "from_file": "server/git-utils.ts",
+      "from_func": "gitPull",
+      "to_file": "server/git-utils.ts",
+      "to_func": "git"
+    },
+    {
+      "from_file": "server/service.ts",
+      "from_func": "stop",
+      "to_file": "server/service.ts",
+      "to_func": "ensureSupportedPlatform"
+    },
+    {
+      "from_file": "server/codex-adapter.ts",
+      "from_func": "CodexAdapter.handleNotification",
+      "to_file": "server/codex-adapter.ts",
+      "to_func": "emit"
+    },
+    {
+      "from_file": "src/components/ClaudeMdEditor.tsx",
+      "from_func": "handleSave",
+      "to_file": "src/components/ClaudeMdEditor.tsx",
+      "to_func": "load"
+    },
+    {
+      "from_file": "server/env-manager.ts",
+      "from_func": "deleteEnv",
+      "to_file": "server/env-manager.ts",
+      "to_func": "ensureDir"
+    }
+  ],
+  "languages": [
+    "typescript"
+  ],
+  "timestamp": 1770980718.0329022
+}

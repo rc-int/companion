@@ -167,11 +167,15 @@ export interface TreeNode {
   children?: TreeNode[];
 }
 
-export interface UpdateInfo {
-  currentVersion: string;
-  latestVersion: string | null;
+export interface RepoUpdateInfo {
+  current: string;
+  latest: string | null;
   updateAvailable: boolean;
-  isServiceMode: boolean;
+}
+
+export interface UpdateInfo {
+  wilco: RepoUpdateInfo;
+  companion: RepoUpdateInfo;
   updateInProgress: boolean;
   lastChecked: number;
 }

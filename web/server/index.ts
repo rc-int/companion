@@ -15,8 +15,7 @@ import { generateSessionTitle } from "./auto-namer.js";
 import * as sessionNames from "./session-names.js";
 import { getSettings } from "./settings-manager.js";
 import { PRPoller } from "./pr-poller.js";
-import { startPeriodicCheck, setServiceMode } from "./update-checker.js";
-import { isRunningAsService } from "./service.js";
+import { startPeriodicCheck } from "./update-checker.js";
 import type { SocketData } from "./ws-bridge.js";
 import type { ServerWebSocket } from "bun";
 
@@ -188,11 +187,8 @@ if (process.env.NODE_ENV !== "production") {
 }
 
 // ── Update checker ──────────────────────────────────────────────────────────
+console.log("[server] Starting update checker...");
 startPeriodicCheck();
-if (isRunningAsService()) {
-  setServiceMode(true);
-  console.log("[server] Running as launchd service (auto-update available)");
-}
 
 // ── Reconnection watchdog ────────────────────────────────────────────────────
 // After a server restart, restored CLI processes may not reconnect their
