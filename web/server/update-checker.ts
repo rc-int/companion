@@ -1,11 +1,8 @@
 import { readFileSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { resolve } from "node:path";
 import { homedir } from "node:os";
-import { fileURLToPath } from "node:url";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-// ── Read current versions from package.json files ────────────────────────────
+// ── Read current version from wilco package.json ─────────────────────────────
 
 function readVersion(packageJsonPath: string): string {
   try {
@@ -15,67 +12,42 @@ function readVersion(packageJsonPath: string): string {
   }
 }
 
-const companionPackageJson = resolve(__dirname, "..", "package.json");
 const wilcoPackageJson = resolve(homedir(), "wilco", "package.json");
 
-const companionVersion = readVersion(companionPackageJson);
-const wilcoVersion = readVersion(wilcoPackageJson);
+// ── GitHub repos ─────────────────────────────────────────────────────────────
 
-// ── GitHub repos to check ────────────────────────────────────────────────────
-
-const REPOS = {
-  wilco: "rc-international/wilco",
-  companion: "rc-int/companion",
-} as const;
+const WILCO_REPO = "rc-international/wilco";
+const UPSTREAM_COMPANION_REPO = "The-Vibe-Company/companion";
 
 const CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 const INITIAL_DELAY_MS = 10_000; // 10 seconds after boot
 
 // ── State ────────────────────────────────────────────────────────────────────
 
-interface RepoState {
-  current: string;
-  latest: string | null;
-}
-
 interface UpdateState {
-  wilco: RepoState;
-  companion: RepoState;
+  currentVersion: string;
+  latestVersion: string | null;
+  upstreamCompanionVersion: string | null;
   lastChecked: number;
   checking: boolean;
-  updateInProgress: boolean;
 }
 
 const state: UpdateState = {
-  wilco: { current: wilcoVersion, latest: null },
-  companion: { current: companionVersion, latest: null },
+  currentVersion: readVersion(wilcoPackageJson),
+  latestVersion: null,
+  upstreamCompanionVersion: null,
   lastChecked: 0,
   checking: false,
-  updateInProgress: false,
 };
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
 export function getUpdateState(): Readonly<UpdateState> {
-  return {
-    wilco: { ...state.wilco },
-    companion: { ...state.companion },
-    lastChecked: state.lastChecked,
-    checking: state.checking,
-    updateInProgress: state.updateInProgress,
-  };
-}
-
-export function setUpdateInProgress(inProgress: boolean): void {
-  state.updateInProgress = inProgress;
+  return { ...state };
 }
 
 export function isUpdateAvailable(): boolean {
-  const wilcoUpdate = state.wilco.latest !== null &&
-    isNewerVersion(state.wilco.latest, state.wilco.current);
-  const companionUpdate = state.companion.latest !== null &&
-    isNewerVersion(state.companion.latest, state.companion.current);
-  return wilcoUpdate || companionUpdate;
+  return state.latestVersion !== null && isNewerVersion(state.latestVersion, state.currentVersion);
 }
 
 /** Simple semver comparison: returns true if a > b. Strips leading 'v'. */
@@ -121,29 +93,34 @@ export async function checkForUpdate(): Promise<void> {
   if (state.checking) return;
   state.checking = true;
   try {
-    const [wilcoLatest, companionLatest] = await Promise.allSettled([
-      fetchLatestRelease(REPOS.wilco),
-      fetchLatestRelease(REPOS.companion),
+    const [wilcoLatest, upstreamLatest] = await Promise.allSettled([
+      fetchLatestRelease(WILCO_REPO),
+      fetchLatestRelease(UPSTREAM_COMPANION_REPO),
     ]);
 
     if (wilcoLatest.status === "fulfilled" && wilcoLatest.value) {
-      state.wilco.latest = wilcoLatest.value;
+      state.latestVersion = wilcoLatest.value;
     }
-    if (companionLatest.status === "fulfilled" && companionLatest.value) {
-      state.companion.latest = companionLatest.value;
+    if (upstreamLatest.status === "fulfilled" && upstreamLatest.value) {
+      state.upstreamCompanionVersion = upstreamLatest.value;
     }
 
     state.lastChecked = Date.now();
 
+    // Informational logging — actual updates handled by scripts/update.sh
     if (isUpdateAvailable()) {
-      const parts: string[] = [];
-      if (state.wilco.latest && isNewerVersion(state.wilco.latest, state.wilco.current)) {
-        parts.push(`wilco ${state.wilco.current} -> ${state.wilco.latest}`);
-      }
-      if (state.companion.latest && isNewerVersion(state.companion.latest, state.companion.current)) {
-        parts.push(`companion ${state.companion.current} -> ${state.companion.latest}`);
-      }
-      console.log(`[update-checker] Updates available: ${parts.join(", ")}`);
+      console.log(
+        `[update-checker] Wilco ${state.latestVersion} available (current: ${state.currentVersion}). ` +
+        `Run 'wilco update' or wait for background auto-update.`,
+      );
+    }
+    if (
+      state.upstreamCompanionVersion &&
+      isNewerVersion(state.upstreamCompanionVersion, readVersion(resolve(homedir(), "wilco", "companion", "web", "package.json")))
+    ) {
+      console.log(
+        `[update-checker] Upstream companion ${state.upstreamCompanionVersion} available. Merge manually when ready.`,
+      );
     }
   } finally {
     state.checking = false;

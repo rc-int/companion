@@ -63,31 +63,21 @@ vi.mock("./settings-manager.js", () => ({
 
 const mockGetUsageLimits = vi.hoisted(() => vi.fn());
 const mockUpdateCheckerState = vi.hoisted(() => ({
-  wilco: { current: "0.1.0", latest: null as string | null },
-  companion: { current: "0.29.0", latest: null as string | null },
+  currentVersion: "0.1.0",
+  latestVersion: null as string | null,
+  upstreamCompanionVersion: null as string | null,
   lastChecked: 0,
   checking: false,
-  updateInProgress: false,
 }));
 const mockCheckForUpdate = vi.hoisted(() => vi.fn(async () => {}));
-const mockIsUpdateAvailable = vi.hoisted(() => vi.fn(() => false));
-const mockSetUpdateInProgress = vi.hoisted(() => vi.fn());
 
 vi.mock("./usage-limits.js", () => ({
   getUsageLimits: mockGetUsageLimits,
 }));
 
-const mockIsNewerVersion = vi.hoisted(() => vi.fn(() => false));
 vi.mock("./update-checker.js", () => ({
-  getUpdateState: vi.fn(() => ({
-    ...mockUpdateCheckerState,
-    wilco: { ...mockUpdateCheckerState.wilco },
-    companion: { ...mockUpdateCheckerState.companion },
-  })),
+  getUpdateState: vi.fn(() => ({ ...mockUpdateCheckerState })),
   checkForUpdate: mockCheckForUpdate,
-  isUpdateAvailable: mockIsUpdateAvailable,
-  isNewerVersion: mockIsNewerVersion,
-  setUpdateInProgress: mockSetUpdateInProgress,
 }));
 
 import { Hono } from "hono";

@@ -6,16 +6,9 @@ interface MockStoreState {
   darkMode: boolean;
   notificationSound: boolean;
   notificationDesktop: boolean;
-  updateInfo: {
-    wilco: { current: string; latest: string | null; updateAvailable: boolean };
-    companion: { current: string; latest: string | null; updateAvailable: boolean };
-    updateInProgress: boolean;
-    lastChecked: number;
-  } | null;
   toggleDarkMode: ReturnType<typeof vi.fn>;
   toggleNotificationSound: ReturnType<typeof vi.fn>;
   setNotificationDesktop: ReturnType<typeof vi.fn>;
-  setUpdateInfo: ReturnType<typeof vi.fn>;
 }
 
 let mockState: MockStoreState;
@@ -25,11 +18,9 @@ function createMockState(overrides: Partial<MockStoreState> = {}): MockStoreStat
     darkMode: false,
     notificationSound: true,
     notificationDesktop: false,
-    updateInfo: null,
     toggleDarkMode: vi.fn(),
     toggleNotificationSound: vi.fn(),
     setNotificationDesktop: vi.fn(),
-    setUpdateInfo: vi.fn(),
     ...overrides,
   };
 }
@@ -37,8 +28,6 @@ function createMockState(overrides: Partial<MockStoreState> = {}): MockStoreStat
 const mockApi = {
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
-  forceCheckForUpdate: vi.fn(),
-  triggerUpdate: vi.fn(),
 };
 
 const mockTelemetry = {
@@ -50,8 +39,6 @@ vi.mock("../api.js", () => ({
   api: {
     getSettings: (...args: unknown[]) => mockApi.getSettings(...args),
     updateSettings: (...args: unknown[]) => mockApi.updateSettings(...args),
-    forceCheckForUpdate: (...args: unknown[]) => mockApi.forceCheckForUpdate(...args),
-    triggerUpdate: (...args: unknown[]) => mockApi.triggerUpdate(...args),
   },
 }));
 
@@ -79,16 +66,6 @@ beforeEach(() => {
   mockApi.updateSettings.mockResolvedValue({
     openrouterApiKeyConfigured: true,
     openrouterModel: "openrouter/free",
-  });
-  mockApi.forceCheckForUpdate.mockResolvedValue({
-    wilco: { current: "0.1.0", latest: null, updateAvailable: false },
-    companion: { current: "0.29.0", latest: null, updateAvailable: false },
-    updateInProgress: false,
-    lastChecked: Date.now(),
-  });
-  mockApi.triggerUpdate.mockResolvedValue({
-    ok: true,
-    message: "Update started. Server will restart shortly.",
   });
   mockTelemetry.getTelemetryPreferenceEnabled.mockReturnValue(true);
 });
@@ -290,44 +267,11 @@ describe("SettingsPage", () => {
     vi.unstubAllGlobals();
   });
 
-  it("checks for updates from settings and stores update info", async () => {
-    mockApi.forceCheckForUpdate.mockResolvedValueOnce({
-      wilco: { current: "0.1.0", latest: "0.2.0", updateAvailable: true },
-      companion: { current: "0.29.0", latest: "0.43.0", updateAvailable: true },
-      updateInProgress: false,
-      lastChecked: Date.now(),
-    });
-
-    render(<SettingsPage />);
-    await screen.findByText("OpenRouter key configured");
-    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
-
-    await waitFor(() => {
-      expect(mockApi.forceCheckForUpdate).toHaveBeenCalledTimes(1);
-      expect(mockState.setUpdateInfo).toHaveBeenCalledWith(expect.objectContaining({
-        wilco: expect.objectContaining({ latest: "0.2.0", updateAvailable: true }),
-      }));
-    });
-    expect(await screen.findByText(/Update available/)).toBeInTheDocument();
-  });
-
-  it("triggers app update from settings when update is available", async () => {
-    mockState = createMockState({
-      updateInfo: {
-        wilco: { current: "0.1.0", latest: "0.2.0", updateAvailable: true },
-        companion: { current: "0.29.0", latest: "0.43.0", updateAvailable: true },
-        updateInProgress: false,
-        lastChecked: Date.now(),
-      },
-    });
+  it("shows auto-update info in settings", async () => {
     render(<SettingsPage />);
     await screen.findByText("OpenRouter key configured");
 
-    fireEvent.click(screen.getByRole("button", { name: "Update & Restart" }));
-
-    await waitFor(() => {
-      expect(mockApi.triggerUpdate).toHaveBeenCalledTimes(1);
-    });
-    expect(await screen.findByText("Update started. Server will restart shortly.")).toBeInTheDocument();
+    expect(screen.getByText("Updates")).toBeInTheDocument();
+    expect(screen.getByText(/wilco update/)).toBeInTheDocument();
   });
 });

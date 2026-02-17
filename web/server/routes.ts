@@ -20,14 +20,10 @@ import { getUsageLimits } from "./usage-limits.js";
 import {
   getUpdateState,
   checkForUpdate,
-  isUpdateAvailable,
-  isNewerVersion,
-  setUpdateInProgress,
 } from "./update-checker.js";
-import { refreshServiceDefinition } from "./service.js";
 import type { AssistantManager } from "./assistant-manager.js";
 
-const UPDATE_CHECK_STALE_MS = 5 * 60 * 1000;
+const UPDATE_CHECK_STALE_MS = 5 * 60 * 1000; // informational staleness threshold
 
 function execCaptureStdout(
   command: string,
@@ -892,7 +888,7 @@ export function createRoutes(
     return c.json(limits);
   });
 
-  // ─── Update checking ─────────────────────────────────────────────────
+  // ─── Update status (informational — updates handled by scripts/update.sh) ──
 
   api.get("/update-check", async (c) => {
     const initialState = getUpdateState();
@@ -902,158 +898,12 @@ export function createRoutes(
     if (needsRefresh) {
       await checkForUpdate();
     }
-
-    const state = getUpdateState();
-    return c.json({
-      wilco: {
-        current: state.wilco.current,
-        latest: state.wilco.latest,
-        updateAvailable: state.wilco.latest !== null &&
-          isNewerVersion(state.wilco.latest, state.wilco.current),
-      },
-      companion: {
-        current: state.companion.current,
-        latest: state.companion.latest,
-        updateAvailable: state.companion.latest !== null &&
-          isNewerVersion(state.companion.latest, state.companion.current),
-      },
-      updateInProgress: state.updateInProgress,
-      lastChecked: state.lastChecked,
-    });
+    return c.json(getUpdateState());
   });
 
   api.post("/update-check", async (c) => {
     await checkForUpdate();
-    const state = getUpdateState();
-    return c.json({
-      wilco: {
-        current: state.wilco.current,
-        latest: state.wilco.latest,
-        updateAvailable: state.wilco.latest !== null &&
-          isNewerVersion(state.wilco.latest, state.wilco.current),
-      },
-      companion: {
-        current: state.companion.current,
-        latest: state.companion.latest,
-        updateAvailable: state.companion.latest !== null &&
-          isNewerVersion(state.companion.latest, state.companion.current),
-      },
-      updateInProgress: state.updateInProgress,
-      lastChecked: state.lastChecked,
-    });
-  });
-
-  api.post("/update", async (c) => {
-    if (!isUpdateAvailable()) {
-      return c.json({ error: "No update available" }, 400);
-    }
-    const state = getUpdateState();
-    if (state.updateInProgress) {
-      return c.json({ error: "Update already in progress" }, 409);
-    }
-
-    setUpdateInProgress(true);
-
-    const home = homedir();
-    const wilcoDir = resolve(home, "wilco");
-    const companionDir = resolve(home, "wilco", "companion");
-
-    // Respond immediately, then perform update async
-    setTimeout(async () => {
-      try {
-        console.log("[update] Starting update...");
-
-        // 1. git pull wilco
-        console.log("[update] Pulling wilco...");
-        const gitWilco = Bun.spawn(["git", "-C", wilcoDir, "pull", "origin", "main"], {
-          stdout: "pipe", stderr: "pipe",
-        });
-        if (await gitWilco.exited !== 0) {
-          const stderr = await new Response(gitWilco.stderr).text();
-          throw new Error(`git pull wilco failed: ${stderr}`);
-        }
-
-        // 2. git pull companion
-        console.log("[update] Pulling companion...");
-        const gitCompanion = Bun.spawn(["git", "-C", companionDir, "pull", "origin", "main"], {
-          stdout: "pipe", stderr: "pipe",
-        });
-        if (await gitCompanion.exited !== 0) {
-          const stderr = await new Response(gitCompanion.stderr).text();
-          throw new Error(`git pull companion failed: ${stderr}`);
-        }
-
-        // 3. bun install in wilco (if bun.lock changed)
-        console.log("[update] Installing wilco deps...");
-        const bunWilco = Bun.spawn(["bun", "install"], {
-          cwd: wilcoDir, stdout: "pipe", stderr: "pipe",
-        });
-        await bunWilco.exited;
-
-        // 4. bun install in companion/web (if bun.lock changed)
-        console.log("[update] Installing companion deps...");
-        const bunCompanion = Bun.spawn(["bun", "install"], {
-          cwd: resolve(companionDir, "web"), stdout: "pipe", stderr: "pipe",
-        });
-        await bunCompanion.exited;
-
-        // 5. pipx install -e wilco
-        console.log("[update] Reinstalling wilco CLI via pipx...");
-        const pipx = Bun.spawn(["pipx", "install", "-e", wilcoDir, "--force"], {
-          stdout: "pipe", stderr: "pipe",
-        });
-        if (await pipx.exited !== 0) {
-          const stderr = await new Response(pipx.stderr).text();
-          console.warn(`[update] pipx install warning: ${stderr}`);
-          // Non-fatal — CLI may still work from editable install
-        }
-
-        // 6. Refresh the service definition so the new unit template takes effect
-        try {
-          refreshServiceDefinition();
-          console.log("[update] Service definition refreshed.");
-        } catch (err) {
-          console.warn("[update] Failed to refresh service definition:", err);
-        }
-
-        console.log("[update] Update successful, restarting service...");
-
-        // 7. Explicitly restart via the service manager in a detached process
-        // so the restart survives our own exit.
-        const isLinux = process.platform === "linux";
-        const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-        const restartCmd = isLinux
-          ? ["systemctl", "--user", "restart", "companion.service"]
-          : uid !== undefined
-            ? ["launchctl", "kickstart", "-k", `gui/${uid}/sh.thecompanion.app`]
-            : ["launchctl", "kickstart", "-k", "sh.thecompanion.app"];
-
-        Bun.spawn(restartCmd, {
-          stdout: "ignore",
-          stderr: "ignore",
-          stdin: "ignore",
-          env: isLinux
-            ? {
-                ...process.env,
-                XDG_RUNTIME_DIR:
-                  process.env.XDG_RUNTIME_DIR ||
-                  `/run/user/${uid ?? 1000}`,
-              }
-            : undefined,
-        });
-
-        // Give the spawn a moment to dispatch, then exit cleanly.
-        setTimeout(() => process.exit(0), 500);
-      } catch (err) {
-        console.error("[update] Update failed:", err);
-        setUpdateInProgress(false);
-      }
-    }, 100);
-
-    return c.json({
-      ok: true,
-      message: "Update started. Server will restart shortly.",
-    });
+    return c.json(getUpdateState());
   });
 
   // ─── Helper ─────────────────────────────────────────────────────────

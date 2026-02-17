@@ -277,19 +277,6 @@ export interface TreeNode {
   children?: TreeNode[];
 }
 
-export interface RepoUpdateInfo {
-  current: string;
-  latest: string | null;
-  updateAvailable: boolean;
-}
-
-export interface UpdateInfo {
-  wilco: RepoUpdateInfo;
-  companion: RepoUpdateInfo;
-  updateInProgress: boolean;
-  lastChecked: number;
-}
-
 export interface UsageLimits {
   five_hour: { utilization: number; resets_at: string | null } | null;
   seven_day: { utilization: number; resets_at: string | null } | null;
@@ -529,12 +516,6 @@ export const api = {
     post<{ ok: boolean }>("/terminal/kill"),
   getTerminal: () =>
     get<{ active: boolean; terminalId?: string; cwd?: string }>("/terminal"),
-
-  // Update checking
-  checkForUpdate: () => get<UpdateInfo>("/update-check"),
-  forceCheckForUpdate: () => post<UpdateInfo>("/update-check"),
-  triggerUpdate: () =>
-    post<{ ok: boolean; message: string }>("/update"),
 
   // Cron jobs
   listCronJobs: () => get<CronJobInfo[]>("/cron/jobs"),

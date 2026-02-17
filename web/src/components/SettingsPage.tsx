@@ -21,13 +21,7 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
   const toggleNotificationSound = useStore((s) => s.toggleNotificationSound);
   const notificationDesktop = useStore((s) => s.notificationDesktop);
   const setNotificationDesktop = useStore((s) => s.setNotificationDesktop);
-  const updateInfo = useStore((s) => s.updateInfo);
-  const setUpdateInfo = useStore((s) => s.setUpdateInfo);
   const notificationApiAvailable = typeof Notification !== "undefined";
-  const [checkingUpdates, setCheckingUpdates] = useState(false);
-  const [updatingApp, setUpdatingApp] = useState(false);
-  const [updateStatus, setUpdateStatus] = useState("");
-  const [updateError, setUpdateError] = useState("");
   const [telemetryEnabled, setTelemetryEnabled] = useState(getTelemetryPreferenceEnabled());
 
   useEffect(() => {
@@ -64,42 +58,6 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function onCheckUpdates() {
-    setCheckingUpdates(true);
-    setUpdateStatus("");
-    setUpdateError("");
-    try {
-      const info = await api.forceCheckForUpdate();
-      setUpdateInfo(info);
-      const hasUpdate = info.wilco.updateAvailable || info.companion.updateAvailable;
-      if (hasUpdate) {
-        const parts: string[] = [];
-        if (info.wilco.updateAvailable && info.wilco.latest) parts.push(`wilco v${info.wilco.latest}`);
-        if (info.companion.updateAvailable && info.companion.latest) parts.push(`companion v${info.companion.latest}`);
-        setUpdateStatus(`Update available: ${parts.join(", ")}`);
-      } else {
-        setUpdateStatus("You are up to date.");
-      }
-    } catch (err: unknown) {
-      setUpdateError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setCheckingUpdates(false);
-    }
-  }
-
-  async function onTriggerUpdate() {
-    setUpdatingApp(true);
-    setUpdateStatus("");
-    setUpdateError("");
-    try {
-      const res = await api.triggerUpdate();
-      setUpdateStatus(res.message);
-    } catch (err: unknown) {
-      setUpdateError(err instanceof Error ? err.message : String(err));
-      setUpdatingApp(false);
     }
   }
 
@@ -225,63 +183,9 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
 
         <div className="mt-4 bg-cc-card border border-cc-border rounded-xl p-4 sm:p-5 space-y-3">
           <h2 className="text-sm font-semibold text-cc-fg">Updates</h2>
-          {updateInfo ? (
-            <p className="text-xs text-cc-muted">
-              Wilco: v{updateInfo.wilco.current}{updateInfo.wilco.latest ? ` → v${updateInfo.wilco.latest}` : ""}
-              {" • "}Companion: v{updateInfo.companion.current}{updateInfo.companion.latest ? ` → v${updateInfo.companion.latest}` : ""}
-            </p>
-          ) : (
-            <p className="text-xs text-cc-muted">Version information not loaded yet.</p>
-          )}
-
-          {updateError && (
-            <div className="px-3 py-2 rounded-lg bg-cc-error/10 border border-cc-error/20 text-xs text-cc-error">
-              {updateError}
-            </div>
-          )}
-
-          {updateStatus && (
-            <div className="px-3 py-2 rounded-lg bg-cc-success/10 border border-cc-success/20 text-xs text-cc-success">
-              {updateStatus}
-            </div>
-          )}
-
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={onCheckUpdates}
-              disabled={checkingUpdates}
-              className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                checkingUpdates
-                  ? "bg-cc-hover text-cc-muted cursor-not-allowed"
-                  : "bg-cc-hover hover:bg-cc-active text-cc-fg cursor-pointer"
-              }`}
-            >
-              {checkingUpdates ? "Checking..." : "Check for updates"}
-            </button>
-
-            {(() => {
-              const hasUpdate = updateInfo?.wilco.updateAvailable || updateInfo?.companion.updateAvailable;
-              return hasUpdate ? (
-              <button
-                type="button"
-                onClick={onTriggerUpdate}
-                disabled={updatingApp || (updateInfo?.updateInProgress ?? false)}
-                className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  updatingApp || updateInfo?.updateInProgress
-                    ? "bg-cc-hover text-cc-muted cursor-not-allowed"
-                    : "bg-cc-primary hover:bg-cc-primary-hover text-white cursor-pointer"
-                }`}
-              >
-                {updatingApp || updateInfo?.updateInProgress ? "Updating..." : "Update & Restart"}
-              </button>
-            ) : (
-              <p className="text-xs text-cc-muted self-center">
-                You are up to date.
-              </p>
-            );
-            })()}
-          </div>
+          <p className="text-xs text-cc-muted">
+            Updates are applied automatically via <code className="font-mono bg-cc-hover px-1 py-0.5 rounded">wilco update</code> or the background auto-updater.
+          </p>
         </div>
 
         <div className="mt-4 bg-cc-card border border-cc-border rounded-xl p-4 sm:p-5 space-y-3">

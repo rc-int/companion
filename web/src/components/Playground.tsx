@@ -3,14 +3,13 @@ import { PermissionBanner } from "./PermissionBanner.js";
 import { MessageBubble } from "./MessageBubble.js";
 import { ToolBlock, getToolIcon, getToolLabel, getPreview, ToolIcon } from "./ToolBlock.js";
 import { DiffViewer } from "./DiffViewer.js";
-import { UpdateBanner } from "./UpdateBanner.js";
 import { ClaudeMdEditor } from "./ClaudeMdEditor.js";
 import { ChatView } from "./ChatView.js";
 import { useStore } from "../store.js";
 import { api } from "../api.js";
 import type { PermissionRequest, ChatMessage, ContentBlock, SessionState, McpServerDetail } from "../types.js";
 import type { TaskItem } from "../types.js";
-import type { UpdateInfo, GitHubPRInfo } from "../api.js";
+import type { GitHubPRInfo } from "../api.js";
 import { GitHubPRDisplay, CodexRateLimitsSection, CodexTokenDetailsSection } from "./TaskPanel.js";
 
 // ─── Mock Data ──────────────────────────────────────────────────────────────
@@ -787,42 +786,6 @@ export function Playground() {
           </div>
         </Section>
 
-        {/* ─── Update Banner ──────────────────────────────── */}
-        <Section title="Update Banner" description="Notification banner for available updates">
-          <div className="space-y-4 max-w-3xl">
-            <Card label="Both repos have updates">
-              <PlaygroundUpdateBanner
-                updateInfo={{
-                  wilco: { current: "0.22.1", latest: "0.23.0", updateAvailable: true },
-                  companion: { current: "0.45.0", latest: "0.46.0", updateAvailable: true },
-                  updateInProgress: false,
-                  lastChecked: Date.now(),
-                }}
-              />
-            </Card>
-            <Card label="Single repo update">
-              <PlaygroundUpdateBanner
-                updateInfo={{
-                  wilco: { current: "0.22.1", latest: "0.22.1", updateAvailable: false },
-                  companion: { current: "0.45.0", latest: "0.46.0", updateAvailable: true },
-                  updateInProgress: false,
-                  lastChecked: Date.now(),
-                }}
-              />
-            </Card>
-            <Card label="Update in progress">
-              <PlaygroundUpdateBanner
-                updateInfo={{
-                  wilco: { current: "0.22.1", latest: "0.23.0", updateAvailable: true },
-                  companion: { current: "0.45.0", latest: "0.46.0", updateAvailable: true },
-                  updateInProgress: true,
-                  lastChecked: Date.now(),
-                }}
-              />
-            </Card>
-          </div>
-        </Section>
-
         {/* ─── Status Indicators ──────────────────────────────── */}
         <Section title="Status Indicators" description="Connection and session status banners">
           <div className="space-y-3 max-w-3xl">
@@ -1319,28 +1282,6 @@ function CodexPlaygroundDemo() {
       <CodexTokenDetailsSection sessionId={CODEX_DEMO_SESSION} />
     </div>
   );
-}
-
-// ─── Inline UpdateBanner (sets store state for playground preview) ───────────
-
-function PlaygroundUpdateBanner({ updateInfo }: { updateInfo: UpdateInfo }) {
-  useEffect(() => {
-    const prev = useStore.getState().updateInfo;
-    const prevDismissed = useStore.getState().updateDismissedVersion;
-    useStore.getState().setUpdateInfo(updateInfo);
-    // Clear any dismiss so the banner shows
-    if (prevDismissed) {
-      useStore.setState({ updateDismissedVersion: null });
-    }
-    return () => {
-      useStore.getState().setUpdateInfo(prev);
-      if (prevDismissed) {
-        useStore.setState({ updateDismissedVersion: prevDismissed });
-      }
-    };
-  }, [updateInfo]);
-
-  return <UpdateBanner />;
 }
 
 // ─── Inline ClaudeMd Button (opens the real editor modal) ───────────────────

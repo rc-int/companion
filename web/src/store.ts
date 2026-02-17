@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { SessionState, PermissionRequest, ChatMessage, SdkSessionInfo, TaskItem, McpServerDetail } from "./types.js";
-import type { UpdateInfo, PRStatusResponse } from "./api.js";
+import type { PRStatusResponse } from "./api.js";
 
 interface AppState {
   // Sessions
@@ -54,10 +54,6 @@ interface AppState {
 
   // Sidebar project grouping
   collapsedProjects: Set<string>;
-
-  // Update info
-  updateInfo: UpdateInfo | null;
-  updateDismissedVersion: string | null;
 
   // UI
   darkMode: boolean;
@@ -134,10 +130,6 @@ interface AppState {
   setCliConnected: (sessionId: string, connected: boolean) => void;
   setSessionStatus: (sessionId: string, status: "idle" | "running" | "compacting" | null) => void;
 
-  // Update actions
-  setUpdateInfo: (info: UpdateInfo | null) => void;
-  dismissUpdate: (version: string) => void;
-
   // Diff panel actions
   setActiveTab: (tab: "chat" | "diff") => void;
   setDiffPanelSelectedFile: (sessionId: string, filePath: string | null) => void;
@@ -192,11 +184,6 @@ function getInitialNotificationDesktop(): boolean {
   return false;
 }
 
-function getInitialDismissedVersion(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem("cc-update-dismissed") || null;
-}
-
 function getInitialAssistantSessionId(): string | null {
   if (typeof window === "undefined") return null;
   return localStorage.getItem("cc-assistant-session-id") || null;
@@ -233,8 +220,6 @@ export const useStore = create<AppState>((set) => ({
   mcpServers: new Map(),
   toolProgress: new Map(),
   collapsedProjects: getInitialCollapsedProjects(),
-  updateInfo: null,
-  updateDismissedVersion: getInitialDismissedVersion(),
   darkMode: getInitialDarkMode(),
   notificationSound: getInitialNotificationSound(),
   notificationDesktop: getInitialNotificationDesktop(),
@@ -610,12 +595,6 @@ export const useStore = create<AppState>((set) => ({
       sessionStatus.set(sessionId, status);
       return { sessionStatus };
     }),
-
-  setUpdateInfo: (info) => set({ updateInfo: info }),
-  dismissUpdate: (version) => {
-    localStorage.setItem("cc-update-dismissed", version);
-    set({ updateDismissedVersion: version });
-  },
 
   setActiveTab: (tab) => set({ activeTab: tab }),
 

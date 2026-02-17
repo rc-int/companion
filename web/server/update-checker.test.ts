@@ -16,11 +16,8 @@ beforeEach(async () => {
   vi.resetModules();
   mockFetch.mockReset();
   mockReadFileSync.mockReset();
-  // Default: return version "0.1.0" for wilco, "0.29.0" for companion
-  mockReadFileSync.mockImplementation((filePath: string) => {
-    if (String(filePath).includes("companion")) {
-      return JSON.stringify({ version: "0.29.0" });
-    }
+  // Default: return version "0.1.0" for wilco package.json
+  mockReadFileSync.mockImplementation(() => {
     return JSON.stringify({ version: "0.1.0" });
   });
   checker = await import("./update-checker.js");
@@ -55,19 +52,18 @@ describe("isNewerVersion", () => {
 
 // ── getUpdateState ──────────────────────────────────────────────────────────
 describe("getUpdateState", () => {
-  it("returns initial dual-repo state", () => {
+  it("returns initial state with currentVersion from package.json", () => {
     const state = checker.getUpdateState();
-    expect(state.wilco.current).toBe("0.1.0");
-    expect(state.wilco.latest).toBeNull();
-    expect(state.companion.current).toBe("0.29.0");
-    expect(state.companion.latest).toBeNull();
-    expect(state.updateInProgress).toBe(false);
+    expect(state.currentVersion).toBe("0.1.0");
+    expect(state.latestVersion).toBeNull();
+    expect(state.upstreamCompanionVersion).toBeNull();
+    expect(state.checking).toBe(false);
   });
 });
 
 // ── checkForUpdate ──────────────────────────────────────────────────────────
 describe("checkForUpdate", () => {
-  it("fetches both repos from GitHub releases API", async () => {
+  it("fetches wilco and upstream companion from GitHub releases API", async () => {
     mockFetch
       .mockResolvedValueOnce({
         ok: true,
@@ -86,13 +82,13 @@ describe("checkForUpdate", () => {
       expect.any(Object),
     );
     expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining("rc-int/companion"),
+      expect.stringContaining("The-Vibe-Company/companion"),
       expect.any(Object),
     );
 
     const state = checker.getUpdateState();
-    expect(state.wilco.latest).toBe("0.2.0");
-    expect(state.companion.latest).toBe("0.31.0");
+    expect(state.latestVersion).toBe("0.2.0");
+    expect(state.upstreamCompanionVersion).toBe("0.31.0");
     expect(state.lastChecked).toBeGreaterThan(0);
   });
 
@@ -102,11 +98,11 @@ describe("checkForUpdate", () => {
     await checker.checkForUpdate();
 
     const state = checker.getUpdateState();
-    expect(state.wilco.latest).toBeNull();
-    expect(state.companion.latest).toBeNull();
+    expect(state.latestVersion).toBeNull();
+    expect(state.upstreamCompanionVersion).toBeNull();
   });
 
-  it("handles partial failure (one repo ok, one fails)", async () => {
+  it("handles partial failure (wilco ok, upstream fails)", async () => {
     mockFetch
       .mockResolvedValueOnce({
         ok: true,
@@ -117,8 +113,8 @@ describe("checkForUpdate", () => {
     await checker.checkForUpdate();
 
     const state = checker.getUpdateState();
-    expect(state.wilco.latest).toBe("0.2.0");
-    expect(state.companion.latest).toBeNull();
+    expect(state.latestVersion).toBe("0.2.0");
+    expect(state.upstreamCompanionVersion).toBeNull();
   });
 
   it("includes GITHUB_TOKEN as Bearer header when set", async () => {
@@ -147,7 +143,7 @@ describe("checkForUpdate", () => {
 
 // ── isUpdateAvailable ───────────────────────────────────────────────────────
 describe("isUpdateAvailable", () => {
-  it("returns false when no latest versions are set", () => {
+  it("returns false when no latest version is set", () => {
     expect(checker.isUpdateAvailable()).toBe(false);
   });
 
@@ -163,40 +159,15 @@ describe("isUpdateAvailable", () => {
     expect(checker.isUpdateAvailable()).toBe(true);
   });
 
-  it("returns true when companion has newer version", async () => {
-    mockFetch
-      .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ tag_name: "v99.0.0" }),
-      });
-
-    await checker.checkForUpdate();
-    expect(checker.isUpdateAvailable()).toBe(true);
-  });
-
-  it("returns false when both are up to date", async () => {
+  it("returns false when version matches current", async () => {
     mockFetch
       .mockResolvedValueOnce({
         ok: true,
         json: () => Promise.resolve({ tag_name: "v0.1.0" }),
       })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: () => Promise.resolve({ tag_name: "v0.29.0" }),
-      });
+      .mockResolvedValueOnce({ ok: false });
 
     await checker.checkForUpdate();
     expect(checker.isUpdateAvailable()).toBe(false);
-  });
-});
-
-// ── setUpdateInProgress ─────────────────────────────────────────────────────
-describe("setUpdateInProgress", () => {
-  it("updates updateInProgress state", () => {
-    checker.setUpdateInProgress(true);
-    expect(checker.getUpdateState().updateInProgress).toBe(true);
-    checker.setUpdateInProgress(false);
-    expect(checker.getUpdateState().updateInProgress).toBe(false);
   });
 });
