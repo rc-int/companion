@@ -1,7 +1,9 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useStore } from "./store.js";
 import { connectSession } from "./ws.js";
+import { api } from "./api.js";
 import { capturePageView } from "./analytics.js";
+import { parseHash, navigateToSession } from "./utils/routing.js";
 import { Sidebar } from "./components/Sidebar.js";
 import { ChatView } from "./components/ChatView.js";
 import { TopBar } from "./components/TopBar.js";
@@ -9,10 +11,14 @@ import { HomePage } from "./components/HomePage.js";
 import { TaskPanel } from "./components/TaskPanel.js";
 import { DiffPanel } from "./components/DiffPanel.js";
 import { Playground } from "./components/Playground.js";
+import { UpdateBanner } from "./components/UpdateBanner.js";
 import { SettingsPage } from "./components/SettingsPage.js";
+import { PromptsPage } from "./components/PromptsPage.js";
 import { EnvManager } from "./components/EnvManager.js";
 import { CronManager } from "./components/CronManager.js";
 import { TerminalPage } from "./components/TerminalPage.js";
+import { SessionLaunchOverlay } from "./components/SessionLaunchOverlay.js";
+import { SessionTerminalDock } from "./components/SessionTerminalDock.js";
 
 function useHash() {
   return useSyncExternalStore(
@@ -28,13 +34,18 @@ export default function App() {
   const taskPanelOpen = useStore((s) => s.taskPanelOpen);
   const homeResetKey = useStore((s) => s.homeResetKey);
   const activeTab = useStore((s) => s.activeTab);
-  const assistantSessionId = useStore((s) => s.assistantSessionId);
+  const sessionCreating = useStore((s) => s.sessionCreating);
+  const sessionCreatingBackend = useStore((s) => s.sessionCreatingBackend);
+  const creationProgress = useStore((s) => s.creationProgress);
+  const creationError = useStore((s) => s.creationError);
   const hash = useHash();
-  const isSettingsPage = hash === "#/settings";
-  const isTerminalPage = hash === "#/terminal";
-  const isEnvironmentsPage = hash === "#/environments";
-  const isScheduledPage = hash === "#/scheduled";
-  const isSessionView = !isSettingsPage && !isTerminalPage && !isEnvironmentsPage && !isScheduledPage;
+  const route = useMemo(() => parseHash(hash), [hash]);
+  const isSettingsPage = route.page === "settings";
+  const isPromptsPage = route.page === "prompts";
+  const isTerminalPage = route.page === "terminal";
+  const isEnvironmentsPage = route.page === "environments";
+  const isScheduledPage = route.page === "scheduled";
+  const isSessionView = route.page === "session" || route.page === "home";
 
   useEffect(() => {
     capturePageView(hash || "#/");
@@ -44,15 +55,48 @@ export default function App() {
     document.documentElement.classList.toggle("dark", darkMode);
   }, [darkMode]);
 
-  // Auto-connect to restored session on mount
+  // Capture the localStorage-restored session ID during render (before any effects run)
+  // so the mount logic can use it even if the hash-sync branch would clear it.
+  const restoredIdRef = useRef(useStore.getState().currentSessionId);
+
+  // Sync hash → store. On mount, restore a localStorage session into the URL first.
   useEffect(() => {
-    const restoredId = useStore.getState().currentSessionId;
-    if (restoredId) {
-      connectSession(restoredId);
+    // On first mount with no session hash, restore from localStorage
+    if (restoredIdRef.current !== null && route.page === "home") {
+      navigateToSession(restoredIdRef.current, true);
+      restoredIdRef.current = null;
+      return; // navigateToSession triggers hashchange → this effect re-runs with the session route
     }
+    restoredIdRef.current = null;
+
+    if (route.page === "session") {
+      const store = useStore.getState();
+      if (store.currentSessionId !== route.sessionId) {
+        store.setCurrentSession(route.sessionId);
+      }
+      connectSession(route.sessionId);
+    } else if (route.page === "home") {
+      const store = useStore.getState();
+      if (store.currentSessionId !== null) {
+        store.setCurrentSession(null);
+      }
+    }
+    // For other pages (settings, terminal, etc.), preserve currentSessionId
+  }, [route]);
+
+  // Poll for updates
+  useEffect(() => {
+    const check = () => {
+      api.checkForUpdate().then((info) => {
+        useStore.getState().setUpdateInfo(info);
+      }).catch(() => {});
+    };
+    check();
+    const interval = setInterval(check, 5 * 60 * 1000);
+    return () => clearInterval(interval);
   }, []);
 
-  if (hash === "#/playground") {
+  if (route.page === "playground") {
     return <Playground />;
   }
 
@@ -81,10 +125,17 @@ export default function App() {
       {/* Main area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <TopBar />
+        <UpdateBanner />
         <div className="flex-1 overflow-hidden relative">
           {isSettingsPage && (
             <div className="absolute inset-0">
               <SettingsPage embedded />
+            </div>
+          )}
+
+          {isPromptsPage && (
+            <div className="absolute inset-0">
+              <PromptsPage embedded />
             </div>
           )}
 
@@ -108,20 +159,36 @@ export default function App() {
 
           {isSessionView && (
             <>
-              {/* Chat tab — visible when activeTab is "chat" or no session */}
-              <div className={`absolute inset-0 ${activeTab === "chat" || !currentSessionId ? "" : "hidden"}`}>
+              <div className="absolute inset-0">
                 {currentSessionId ? (
-                  <ChatView sessionId={currentSessionId} />
+                  activeTab === "terminal"
+                    ? (
+                      <SessionTerminalDock
+                        sessionId={currentSessionId}
+                        terminalOnly
+                        onClosePanel={() => useStore.getState().setActiveTab("chat")}
+                      />
+                    )
+                    : (
+                      <SessionTerminalDock sessionId={currentSessionId} suppressPanel>
+                        {activeTab === "diff"
+                          ? <DiffPanel sessionId={currentSessionId} />
+                          : <ChatView sessionId={currentSessionId} />}
+                      </SessionTerminalDock>
+                    )
                 ) : (
                   <HomePage key={homeResetKey} />
                 )}
               </div>
 
-              {/* Diff tab — not shown for assistant session */}
-              {currentSessionId && activeTab === "diff" && currentSessionId !== assistantSessionId && (
-                <div className="absolute inset-0">
-                  <DiffPanel sessionId={currentSessionId} />
-                </div>
+              {/* Session launch overlay — shown during creation */}
+              {sessionCreating && creationProgress && creationProgress.length > 0 && (
+                <SessionLaunchOverlay
+                  steps={creationProgress}
+                  error={creationError}
+                  backend={sessionCreatingBackend ?? undefined}
+                  onCancel={() => useStore.getState().clearCreation()}
+                />
               )}
             </>
           )}
@@ -131,6 +198,20 @@ export default function App() {
       {/* Task panel — overlay on mobile, inline on desktop */}
       {currentSessionId && isSessionView && (
         <>
+          {!taskPanelOpen && (
+            <button
+              type="button"
+              onClick={() => useStore.getState().setTaskPanelOpen(true)}
+              className="hidden lg:flex fixed right-0 top-1/2 -translate-y-1/2 z-30 items-center gap-1 rounded-l-lg border border-r-0 border-cc-border bg-cc-card/95 backdrop-blur px-2 py-2 text-[11px] text-cc-muted hover:text-cc-fg hover:bg-cc-hover transition-colors cursor-pointer"
+              title="Open context panel"
+            >
+              <svg viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3">
+                <path d="M3 2.5A1.5 1.5 0 014.5 1h7A1.5 1.5 0 0113 2.5v11a1.5 1.5 0 01-1.5 1.5h-7A1.5 1.5 0 013 13.5v-11zm2 .5v10h6V3H5z" />
+              </svg>
+              <span className="[writing-mode:vertical-rl] rotate-180 tracking-wide">Context</span>
+            </button>
+          )}
+
           {/* Mobile overlay backdrop */}
           {taskPanelOpen && (
             <div
@@ -143,7 +224,7 @@ export default function App() {
             className={`
               fixed lg:relative z-40 lg:z-auto right-0 top-0
               h-full shrink-0 transition-all duration-200
-              ${taskPanelOpen ? "w-[280px] translate-x-0" : "w-0 translate-x-full lg:w-0 lg:translate-x-full"}
+              ${taskPanelOpen ? "w-[320px] translate-x-0" : "w-0 translate-x-full lg:w-0 lg:translate-x-full"}
               overflow-hidden
             `}
           >

@@ -254,8 +254,26 @@ export interface CompanionEnv {
   name: string;
   slug: string;
   variables: Record<string, string>;
+  dockerfile?: string;
+  imageTag?: string;
+  baseImage?: string;
+  buildStatus?: "idle" | "building" | "success" | "error";
+  buildError?: string;
+  lastBuiltAt?: number;
+  ports?: number[];
+  volumes?: string[];
+  initScript?: string;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface ImagePullState {
+  image: string;
+  status: "idle" | "pulling" | "ready" | "error";
+  progress: string[];
+  error?: string;
+  startedAt?: number;
+  completedAt?: number;
 }
 
 export interface DirEntry {
@@ -345,26 +363,90 @@ export interface CronJobExecution {
   costUsd?: number;
 }
 
-export interface AssistantStatus {
-  running: boolean;
-  sessionId: string | null;
-  config: {
-    enabled: boolean;
-    sessionId: string | null;
-    cliSessionId: string | null;
-    model: string;
-    permissionMode: string;
-    createdAt: number;
-    lastActiveAt: number;
-    contextRestorations: number;
-  };
+export interface SavedPrompt {
+  id: string;
+  name: string;
+  content: string;
+  scope: "global" | "project";
+  projectPath?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+// ─── SSE Session Creation ────────────────────────────────────────────────────
+
+export interface CreationProgressEvent {
+  step: string;
+  label: string;
+  status: "in_progress" | "done" | "error";
+  detail?: string;
+}
+
+export interface CreateSessionStreamResult {
+  sessionId: string;
+  state: string;
   cwd: string;
 }
 
-export interface AssistantConfig {
-  enabled: boolean;
-  model: string;
-  permissionMode: string;
+/**
+ * Create a session with real-time progress streaming via SSE.
+ * Uses fetch + ReadableStream (EventSource is GET-only, this is POST).
+ */
+export async function createSessionStream(
+  opts: CreateSessionOpts | undefined,
+  onProgress: (progress: CreationProgressEvent) => void,
+): Promise<CreateSessionStreamResult> {
+  const res = await fetch(`${BASE}/sessions/create-stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(opts ?? {}),
+  });
+
+  if (!res.ok || !res.body) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error((err as { error?: string }).error || res.statusText);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result: CreateSessionStreamResult | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // Parse SSE events: split on double newlines
+    const chunks = buffer.split("\n\n");
+    buffer = chunks.pop() || "";
+
+    for (const chunk of chunks) {
+      if (!chunk.trim()) continue;
+      let eventType = "";
+      let data = "";
+      for (const line of chunk.split("\n")) {
+        if (line.startsWith("event:")) eventType = line.slice(6).trim();
+        else if (line.startsWith("data:")) data = line.slice(5).trim();
+      }
+      if (!data) continue;
+
+      const parsed = JSON.parse(data);
+      if (eventType === "progress") {
+        onProgress(parsed as CreationProgressEvent);
+      } else if (eventType === "done") {
+        result = parsed as CreateSessionStreamResult;
+      } else if (eventType === "error") {
+        throw new Error((parsed as { error: string }).error || "Session creation failed");
+      }
+    }
+  }
+
+  if (!result) {
+    throw new Error("Stream ended without session creation result");
+  }
+
+  return result;
 }
 
 export const api = {
@@ -408,13 +490,39 @@ export const api = {
   listEnvs: () => get<CompanionEnv[]>("/envs"),
   getEnv: (slug: string) =>
     get<CompanionEnv>(`/envs/${encodeURIComponent(slug)}`),
-  createEnv: (name: string, variables: Record<string, string>) =>
-    post<CompanionEnv>("/envs", { name, variables }),
+  createEnv: (name: string, variables: Record<string, string>, docker?: {
+    dockerfile?: string;
+    baseImage?: string;
+    ports?: number[];
+    volumes?: string[];
+    initScript?: string;
+  }) =>
+    post<CompanionEnv>("/envs", { name, variables, ...docker }),
   updateEnv: (
     slug: string,
-    data: { name?: string; variables?: Record<string, string> },
+    data: {
+      name?: string;
+      variables?: Record<string, string>;
+      dockerfile?: string;
+      baseImage?: string;
+      ports?: number[];
+      volumes?: string[];
+      initScript?: string;
+    },
   ) => put<CompanionEnv>(`/envs/${encodeURIComponent(slug)}`, data),
   deleteEnv: (slug: string) => del(`/envs/${encodeURIComponent(slug)}`),
+
+  // Environment Docker builds
+  buildEnvImage: (slug: string) =>
+    post<{ ok: boolean; imageTag: string }>(`/envs/${encodeURIComponent(slug)}/build`),
+  getEnvBuildStatus: (slug: string) =>
+    get<{ buildStatus: string; buildError?: string; lastBuiltAt?: number; imageTag?: string }>(
+      `/envs/${encodeURIComponent(slug)}/build-status`,
+    ),
+  buildBaseImage: () =>
+    post<{ ok: boolean; tag: string }>("/docker/build-base"),
+  getBaseImageStatus: () =>
+    get<{ exists: boolean; tag: string }>("/docker/base-image"),
 
   // Settings
   getSettings: () => get<AppSettings>("/settings"),
@@ -428,22 +536,6 @@ export const api = {
     get<GitBranchInfo[]>(
       `/git/branches?repoRoot=${encodeURIComponent(repoRoot)}`,
     ),
-  listWorktrees: (repoRoot: string) =>
-    get<GitWorktreeInfo[]>(
-      `/git/worktrees?repoRoot=${encodeURIComponent(repoRoot)}`,
-    ),
-  createWorktree: (
-    repoRoot: string,
-    branch: string,
-    opts?: { baseBranch?: string; createBranch?: boolean },
-  ) =>
-    post<WorktreeCreateResult>("/git/worktree", { repoRoot, branch, ...opts }),
-  removeWorktree: (repoRoot: string, worktreePath: string, force?: boolean) =>
-    del<{ removed: boolean; reason?: string }>("/git/worktree", {
-      repoRoot,
-      worktreePath,
-      force,
-    }),
   gitFetch: (repoRoot: string) =>
     post<{ success: boolean; output: string }>("/git/fetch", { repoRoot }),
   gitPull: (cwd: string) =>
@@ -453,6 +545,24 @@ export const api = {
       git_ahead: number;
       git_behind: number;
     }>("/git/pull", { cwd }),
+
+  // Git worktrees
+  listWorktrees: (repoRoot: string) =>
+    get<GitWorktreeInfo[]>(
+      `/git/worktrees?repoRoot=${encodeURIComponent(repoRoot)}`,
+    ),
+  createWorktree: (
+    repoRoot: string,
+    branch: string,
+    opts?: { baseBranch?: string; createBranch?: boolean },
+  ) =>
+    post<WorktreeCreateResult>("/git/worktree", {
+      repoRoot,
+      branch,
+      ...opts,
+    }),
+  removeWorktree: (repoRoot: string, worktreePath: string, force?: boolean) =>
+    del("/git/worktree", { repoRoot, worktreePath, force }),
 
   // GitHub PR status
   getPRStatus: (cwd: string, branch: string) =>
@@ -471,6 +581,12 @@ export const api = {
   // Containers
   getContainerStatus: () => get<ContainerStatus>("/containers/status"),
   getContainerImages: () => get<string[]>("/containers/images"),
+
+  // Image pull manager
+  getImageStatus: (tag: string) =>
+    get<ImagePullState>(`/images/${encodeURIComponent(tag)}/status`),
+  pullImage: (tag: string) =>
+    post<{ ok: boolean; state: ImagePullState }>(`/images/${encodeURIComponent(tag)}/pull`),
   getCloudProviderPlan: (provider: "modal", cwd: string, sessionId: string) =>
     get<CloudProviderPlan>(
       `/cloud/providers/${encodeURIComponent(provider)}/plan?cwd=${encodeURIComponent(cwd)}&sessionId=${encodeURIComponent(sessionId)}`,
@@ -493,9 +609,9 @@ export const api = {
     ),
   writeFile: (path: string, content: string) =>
     put<{ ok: boolean; path: string }>("/fs/write", { path, content }),
-  getFileDiff: (path: string) =>
+  getFileDiff: (path: string, base?: "last-commit" | "default-branch") =>
     get<{ path: string; diff: string }>(
-      `/fs/diff?path=${encodeURIComponent(path)}`,
+      `/fs/diff?path=${encodeURIComponent(path)}${base ? `&base=${encodeURIComponent(base)}` : ""}`,
     ),
   getClaudeMdFiles: (cwd: string) =>
     get<{ cwd: string; files: { path: string; content: string }[] }>(
@@ -510,12 +626,16 @@ export const api = {
     get<UsageLimits>(`/sessions/${encodeURIComponent(sessionId)}/usage-limits`),
 
   // Terminal
-  spawnTerminal: (cwd: string, cols?: number, rows?: number) =>
-    post<{ terminalId: string }>("/terminal/spawn", { cwd, cols, rows }),
-  killTerminal: () =>
-    post<{ ok: boolean }>("/terminal/kill"),
-  getTerminal: () =>
-    get<{ active: boolean; terminalId?: string; cwd?: string }>("/terminal"),
+  spawnTerminal: (cwd: string, cols?: number, rows?: number, opts?: { containerId?: string }) =>
+    post<{ terminalId: string }>("/terminal/spawn", { cwd, cols, rows, containerId: opts?.containerId }),
+  killTerminal: (terminalId: string) =>
+    post<{ ok: boolean }>("/terminal/kill", { terminalId }),
+  getTerminal: (terminalId?: string) =>
+    get<{ active: boolean; terminalId?: string; cwd?: string }>(
+      terminalId
+        ? `/terminal?terminalId=${encodeURIComponent(terminalId)}`
+        : "/terminal",
+    ),
 
   // Cron jobs
   listCronJobs: () => get<CronJobInfo[]>("/cron/jobs"),
@@ -529,15 +649,22 @@ export const api = {
   getCronJobExecutions: (id: string) =>
     get<CronJobExecution[]>(`/cron/jobs/${encodeURIComponent(id)}/executions`),
 
-  // Assistant
-  getAssistantStatus: () => get<AssistantStatus>("/assistant/status"),
-  launchAssistant: () => post<{ ok: boolean; sessionId: string }>("/assistant/launch"),
-  stopAssistant: () => post<{ ok: boolean }>("/assistant/stop"),
-  getAssistantConfig: () => get<AssistantConfig>("/assistant/config"),
-  updateAssistantConfig: (data: Partial<AssistantConfig>) =>
-    put<AssistantConfig>("/assistant/config", data),
-
   // Cross-session messaging
   sendSessionMessage: (sessionId: string, content: string) =>
     post<{ ok: boolean }>(`/sessions/${encodeURIComponent(sessionId)}/message`, { content }),
+
+  // Saved prompts
+  listPrompts: (cwd?: string, scope?: "global" | "project" | "all") => {
+    const params = new URLSearchParams();
+    if (cwd) params.set("cwd", cwd);
+    if (scope) params.set("scope", scope);
+    const query = params.toString();
+    return get<SavedPrompt[]>(`/prompts${query ? `?${query}` : ""}`);
+  },
+  createPrompt: (data: { name: string; content: string; scope: "global" | "project"; cwd?: string }) =>
+    post<SavedPrompt>("/prompts", data),
+  updatePrompt: (id: string, data: { name?: string; content?: string }) =>
+    put<SavedPrompt>(`/prompts/${encodeURIComponent(id)}`, data),
+  deletePrompt: (id: string) =>
+    del<{ ok: boolean }>(`/prompts/${encodeURIComponent(id)}`),
 };

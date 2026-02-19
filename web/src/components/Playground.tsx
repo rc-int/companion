@@ -3,14 +3,19 @@ import { PermissionBanner } from "./PermissionBanner.js";
 import { MessageBubble } from "./MessageBubble.js";
 import { ToolBlock, getToolIcon, getToolLabel, getPreview, ToolIcon } from "./ToolBlock.js";
 import { DiffViewer } from "./DiffViewer.js";
+import { useStore } from "../store.js";
+import { navigateToSession, navigateHome } from "../utils/routing.js";
+import { UpdateBanner } from "./UpdateBanner.js";
 import { ClaudeMdEditor } from "./ClaudeMdEditor.js";
 import { ChatView } from "./ChatView.js";
-import { useStore } from "../store.js";
 import { api } from "../api.js";
 import type { PermissionRequest, ChatMessage, ContentBlock, SessionState, McpServerDetail } from "../types.js";
 import type { TaskItem } from "../types.js";
-import type { GitHubPRInfo } from "../api.js";
+import type { UpdateInfo, GitHubPRInfo } from "../api.js";
 import { GitHubPRDisplay, CodexRateLimitsSection, CodexTokenDetailsSection } from "./TaskPanel.js";
+import { SessionCreationProgress } from "./SessionCreationProgress.js";
+import { SessionLaunchOverlay } from "./SessionLaunchOverlay.js";
+import type { CreationProgressEvent } from "../types.js";
 
 // ─── Mock Data ──────────────────────────────────────────────────────────────
 
@@ -469,7 +474,8 @@ export function Playground() {
       context_used_percent: 62,
       is_compacting: false,
       git_branch: "feat/jwt-auth",
-      is_worktree: true,
+      is_worktree: false,
+      is_containerized: true,
       repo_root: "/Users/stan/Dev/project",
       git_ahead: 3,
       git_behind: 0,
@@ -540,7 +546,14 @@ export function Playground() {
           </div>
           <div className="flex items-center gap-3">
             <button
-              onClick={() => { window.location.hash = ""; }}
+              onClick={() => {
+                const sessionId = useStore.getState().currentSessionId;
+                if (sessionId) {
+                  navigateToSession(sessionId);
+                } else {
+                  navigateHome();
+                }
+              }}
               className="px-3 py-1.5 text-xs font-medium rounded-lg bg-cc-hover hover:bg-cc-active text-cc-fg border border-cc-border transition-colors cursor-pointer"
             >
               Back to App
@@ -629,6 +642,17 @@ export function Playground() {
             <ToolBlock name="Bash" input={{ command: "git status && npm run lint", description: "Check git status and lint" }} toolUseId="tb-1" />
             <ToolBlock name="Read" input={{ file_path: "/Users/stan/Dev/project/src/index.ts", offset: 10, limit: 50 }} toolUseId="tb-2" />
             <ToolBlock name="Edit" input={{ file_path: "src/utils.ts", old_string: "const x = 1;", new_string: "const x = 2;", replace_all: true }} toolUseId="tb-3" />
+            <ToolBlock
+              name="Edit"
+              input={{
+                file_path: "/Users/stan/Dev/project/src/store.ts",
+                changes: [
+                  { path: "/Users/stan/Dev/project/src/store.ts", kind: "update" },
+                  { path: "/Users/stan/Dev/project/src/ws.ts", kind: "update" },
+                ],
+              }}
+              toolUseId="tb-3b"
+            />
             <ToolBlock name="Write" input={{ file_path: "src/new-file.ts", content: 'export const hello = "world";\n' }} toolUseId="tb-4" />
             <ToolBlock name="Glob" input={{ pattern: "**/*.tsx", path: "/Users/stan/Dev/project/src" }} toolUseId="tb-5" />
             <ToolBlock name="Grep" input={{ pattern: "useEffect", path: "src/", glob: "*.tsx", output_mode: "content", context: 3, head_limit: 20 }} toolUseId="tb-6" />
@@ -786,6 +810,48 @@ export function Playground() {
           </div>
         </Section>
 
+        {/* ─── Update Banner ──────────────────────────────── */}
+        <Section title="Update Banner" description="Notification banner for available updates">
+          <div className="space-y-4 max-w-3xl">
+            <Card label="Service mode (auto-update)">
+              <PlaygroundUpdateBanner
+                updateInfo={{
+                  currentVersion: "0.22.1",
+                  latestVersion: "0.23.0",
+                  updateAvailable: true,
+                  isServiceMode: true,
+                  updateInProgress: false,
+                  lastChecked: Date.now(),
+                }}
+              />
+            </Card>
+            <Card label="Foreground mode (manual)">
+              <PlaygroundUpdateBanner
+                updateInfo={{
+                  currentVersion: "0.22.1",
+                  latestVersion: "0.23.0",
+                  updateAvailable: true,
+                  isServiceMode: false,
+                  updateInProgress: false,
+                  lastChecked: Date.now(),
+                }}
+              />
+            </Card>
+            <Card label="Update in progress">
+              <PlaygroundUpdateBanner
+                updateInfo={{
+                  currentVersion: "0.22.1",
+                  latestVersion: "0.23.0",
+                  updateAvailable: true,
+                  isServiceMode: true,
+                  updateInProgress: true,
+                  lastChecked: Date.now(),
+                }}
+              />
+            </Card>
+          </div>
+        </Section>
+
         {/* ─── Status Indicators ──────────────────────────────── */}
         <Section title="Status Indicators" description="Connection and session status banners">
           <div className="space-y-3 max-w-3xl">
@@ -819,35 +885,35 @@ export function Playground() {
         </Section>
 
         {/* ─── Composer ──────────────────────────────── */}
-        <Section title="Composer" description="Message input bar with mode toggle, image upload, and send/stop buttons">
+        <Section title="Composer" description="Message input bar with mode toggle, image upload, saved prompts (@), and send/stop buttons">
           <div className="max-w-3xl">
             <Card label="Connected — code mode">
               <div className="border-t border-cc-border bg-cc-card px-4 py-3">
-                <div className="bg-cc-input-bg border border-cc-border rounded-[14px] overflow-hidden">
-                  <textarea
-                    readOnly
-                    value="Can you refactor the auth module to use JWT?"
-                    rows={1}
-                    className="w-full px-4 pt-3 pb-1 text-sm bg-transparent resize-none text-cc-fg font-sans-ui"
-                    style={{ minHeight: "36px" }}
-                  />
-                  <div className="flex items-center justify-between px-2.5 pb-2.5">
-                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[12px] font-medium text-cc-muted">
+                <div className="relative bg-cc-input-bg/95 border border-cc-border rounded-[14px] shadow-[0_10px_30px_rgba(0,0,0,0.10)] overflow-visible">
+                  <div className="flex items-end gap-2 px-2.5 py-2">
+                    <div className="mb-0.5 flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-cc-border text-[12px] font-semibold text-cc-muted">
                       <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
                         <path d="M2.5 4l4 4-4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
                         <path d="M8.5 4l4 4-4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
                       </svg>
                       <span>code</span>
                     </div>
-                    <div className="flex items-center gap-1">
-                      <div className="flex items-center justify-center w-8 h-8 rounded-lg text-cc-muted">
+                    <textarea
+                      readOnly
+                      value="Can you refactor the auth module to use JWT?"
+                      rows={1}
+                      className="flex-1 min-w-0 px-2 py-1.5 text-sm bg-transparent resize-none text-cc-fg font-sans-ui"
+                      style={{ minHeight: "36px" }}
+                    />
+                    <div className="mb-0.5 flex items-center gap-1.5">
+                      <div className="flex items-center justify-center w-9 h-9 rounded-lg border border-cc-border text-cc-muted">
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-4 h-4">
                           <rect x="2" y="2" width="12" height="12" rx="2" />
                           <circle cx="5.5" cy="5.5" r="1" fill="currentColor" stroke="none" />
                           <path d="M2 11l3-3 2 2 3-4 4 5" strokeLinecap="round" strokeLinejoin="round" />
                         </svg>
                       </div>
-                      <div className="flex items-center justify-center w-8 h-8 rounded-full bg-cc-primary text-white">
+                      <div className="flex items-center justify-center w-9 h-9 rounded-full bg-cc-primary text-white shadow-[0_6px_20px_rgba(0,0,0,0.18)]">
                         <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
                           <path d="M3 2l11 6-11 6V9.5l7-1.5-7-1.5V2z" />
                         </svg>
@@ -858,34 +924,67 @@ export function Playground() {
               </div>
             </Card>
             <div className="mt-4" />
+            <Card label="@ prompt insertion">
+              <div className="border-t border-cc-border bg-cc-card px-4 py-3">
+                <div className="relative bg-cc-input-bg/95 border border-cc-border rounded-[14px] shadow-[0_10px_30px_rgba(0,0,0,0.10)] overflow-visible">
+                  <div className="absolute left-2 right-2 bottom-full mb-1 max-h-[180px] overflow-y-auto bg-cc-card border border-cc-border rounded-[10px] shadow-lg z-20 py-1">
+                    <div className="px-3 py-2 flex items-center gap-2.5 bg-cc-hover">
+                      <span className="flex items-center justify-center w-6 h-6 rounded-md bg-cc-hover text-cc-muted shrink-0">@</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[13px] font-medium text-cc-fg truncate">@review-pr</div>
+                        <div className="text-[11px] text-cc-muted truncate">Review this PR and list risks, regressions, and missing tests.</div>
+                      </div>
+                      <span className="text-[10px] text-cc-muted shrink-0">project</span>
+                    </div>
+                  </div>
+                  <div className="flex items-end gap-2 px-2.5 py-2">
+                    <textarea
+                      readOnly
+                      value="@rev"
+                      rows={1}
+                      className="flex-1 min-w-0 px-2 py-1.5 text-sm bg-transparent resize-none text-cc-fg font-sans-ui"
+                      style={{ minHeight: "36px" }}
+                    />
+                    <div className="mb-0.5 flex items-center gap-1.5">
+                      <div className="flex items-center justify-center w-9 h-9 rounded-lg border border-cc-border text-cc-muted">
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-4 h-4">
+                          <path d="M4 2.75h8A1.25 1.25 0 0113.25 4v9.25L8 10.5l-5.25 2.75V4A1.25 1.25 0 014 2.75z" />
+                        </svg>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </Card>
+            <div className="mt-4" />
             <Card label="Plan mode active">
               <div className="border-t border-cc-border bg-cc-card px-4 py-3">
-                <div className="bg-cc-input-bg border border-cc-primary/40 rounded-[14px] overflow-hidden">
-                  <textarea
-                    readOnly
-                    value=""
-                    placeholder="Type a message... (/ for commands)"
-                    rows={1}
-                    className="w-full px-4 pt-3 pb-1 text-sm bg-transparent resize-none text-cc-fg font-sans-ui placeholder:text-cc-muted"
-                    style={{ minHeight: "36px" }}
-                  />
-                  <div className="flex items-center justify-between px-2.5 pb-2.5">
-                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[12px] font-medium text-cc-primary">
+                <div className="relative bg-cc-input-bg/95 border border-cc-primary/40 rounded-[14px] shadow-[0_10px_30px_rgba(0,0,0,0.10)] overflow-visible">
+                  <div className="flex items-end gap-2 px-2.5 py-2">
+                    <div className="mb-0.5 flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-cc-primary/40 text-[12px] font-semibold text-cc-primary bg-cc-primary/8">
                       <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
                         <rect x="3" y="3" width="3.5" height="10" rx="0.75" />
                         <rect x="9.5" y="3" width="3.5" height="10" rx="0.75" />
                       </svg>
                       <span>plan</span>
                     </div>
-                    <div className="flex items-center gap-1">
-                      <div className="flex items-center justify-center w-8 h-8 rounded-lg text-cc-muted">
+                    <textarea
+                      readOnly
+                      value=""
+                      placeholder="Type a message... (/ + @)"
+                      rows={1}
+                      className="flex-1 min-w-0 px-2 py-1.5 text-sm bg-transparent resize-none text-cc-fg font-sans-ui placeholder:text-cc-muted"
+                      style={{ minHeight: "36px" }}
+                    />
+                    <div className="mb-0.5 flex items-center gap-1.5">
+                      <div className="flex items-center justify-center w-9 h-9 rounded-lg border border-cc-border text-cc-muted">
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-4 h-4">
                           <rect x="2" y="2" width="12" height="12" rx="2" />
                           <circle cx="5.5" cy="5.5" r="1" fill="currentColor" stroke="none" />
                           <path d="M2 11l3-3 2 2 3-4 4 5" strokeLinecap="round" strokeLinejoin="round" />
                         </svg>
                       </div>
-                      <div className="flex items-center justify-center w-8 h-8 rounded-full bg-cc-hover text-cc-muted">
+                      <div className="flex items-center justify-center w-9 h-9 rounded-full bg-cc-hover text-cc-muted">
                         <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
                           <path d="M3 2l11 6-11 6V9.5l7-1.5-7-1.5V2z" />
                         </svg>
@@ -898,49 +997,32 @@ export function Playground() {
             <div className="mt-4" />
             <Card label="Running — stop button visible">
               <div className="border-t border-cc-border bg-cc-card px-4 py-3">
-                <div className="bg-cc-input-bg border border-cc-border rounded-[14px] overflow-hidden">
-                  <textarea
-                    readOnly
-                    value=""
-                    placeholder="Type a message... (/ for commands)"
-                    rows={1}
-                    className="w-full px-4 pt-3 pb-1 text-sm bg-transparent resize-none text-cc-fg font-sans-ui placeholder:text-cc-muted"
-                    style={{ minHeight: "36px" }}
-                  />
-                  {/* Git branch info */}
-                  <div className="flex items-center gap-2 px-4 pb-1 text-[11px] text-cc-muted overflow-hidden">
-                    <span className="flex items-center gap-1 truncate min-w-0">
-                      <svg viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3 shrink-0 opacity-60">
-                        <path d="M11.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.116.862a2.25 2.25 0 10-.862.862A4.48 4.48 0 007.25 7.5h-1.5A2.25 2.25 0 003.5 9.75v.318a2.25 2.25 0 101.5 0V9.75a.75.75 0 01.75-.75h1.5a5.98 5.98 0 003.884-1.435A2.25 2.25 0 109.634 3.362zM4.25 12a.75.75 0 100 1.5.75.75 0 000-1.5z" />
-                      </svg>
-                      <span className="truncate">feat/jwt-auth</span>
-                      <span className="text-[10px] bg-cc-primary/10 text-cc-primary px-1 rounded">worktree</span>
-                    </span>
-                    <span className="flex items-center gap-0.5 text-[10px]">
-                      <span className="text-green-500">3&#8593;</span>
-                    </span>
-                    <span className="flex items-center gap-1 shrink-0">
-                      <span className="text-green-500">+142</span>
-                      <span className="text-red-400">-38</span>
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between px-2.5 pb-2.5">
-                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[12px] font-medium text-cc-muted">
+                <div className="relative bg-cc-input-bg/95 border border-cc-border rounded-[14px] shadow-[0_10px_30px_rgba(0,0,0,0.10)] overflow-visible">
+                  <div className="flex items-end gap-2 px-2.5 py-2">
+                    <div className="mb-0.5 flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-cc-border text-[12px] font-semibold text-cc-muted">
                       <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
                         <path d="M2.5 4l4 4-4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
                         <path d="M8.5 4l4 4-4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
                       </svg>
                       <span>code</span>
                     </div>
-                    <div className="flex items-center gap-1">
-                      <div className="flex items-center justify-center w-8 h-8 rounded-lg text-cc-muted">
+                    <textarea
+                      readOnly
+                      value=""
+                      placeholder="Type a message... (/ for commands)"
+                      rows={1}
+                      className="flex-1 min-w-0 px-2 py-1.5 text-sm bg-transparent resize-none text-cc-fg font-sans-ui placeholder:text-cc-muted"
+                      style={{ minHeight: "36px" }}
+                    />
+                    <div className="mb-0.5 flex items-center gap-1.5">
+                      <div className="flex items-center justify-center w-9 h-9 rounded-lg border border-cc-border text-cc-muted">
                         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-4 h-4">
                           <rect x="2" y="2" width="12" height="12" rx="2" />
                           <circle cx="5.5" cy="5.5" r="1" fill="currentColor" stroke="none" />
                           <path d="M2 11l3-3 2 2 3-4 4 5" strokeLinecap="round" strokeLinejoin="round" />
                         </svg>
                       </div>
-                      <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-cc-error/10 text-cc-error">
+                      <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-cc-error/10 text-cc-error">
                         <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
                           <rect x="3" y="3" width="10" height="10" rx="1" />
                         </svg>
@@ -1061,11 +1143,135 @@ export function Playground() {
             </Card>
           </div>
         </Section>
+        {/* ─── Session Creation Progress ─────────────────────── */}
+        <Section title="Session Creation Progress" description="Step-by-step progress indicator shown during session creation (SSE streaming)">
+          <div className="space-y-4 max-w-md">
+            <Card label="In progress (container session)">
+              <SessionCreationProgress
+                steps={[
+                  { step: "resolving_env", label: "Resolving environment...", status: "done" },
+                  { step: "pulling_image", label: "Pulling Docker image...", status: "done" },
+                  { step: "creating_container", label: "Starting container...", status: "in_progress" },
+                  { step: "launching_cli", label: "Launching Claude Code...", status: "in_progress" },
+                ] satisfies CreationProgressEvent[]}
+              />
+            </Card>
+            <Card label="Completed (worktree session)">
+              <SessionCreationProgress
+                steps={[
+                  { step: "resolving_env", label: "Resolving environment...", status: "done" },
+                  { step: "fetching_git", label: "Fetching from remote...", status: "done" },
+                  { step: "checkout_branch", label: "Checking out feat/auth...", status: "done" },
+                  { step: "creating_worktree", label: "Creating worktree...", status: "done" },
+                  { step: "launching_cli", label: "Launching Claude Code...", status: "done" },
+                ] satisfies CreationProgressEvent[]}
+              />
+            </Card>
+            <Card label="Error during image pull">
+              <SessionCreationProgress
+                steps={[
+                  { step: "resolving_env", label: "Resolving environment...", status: "done" },
+                  { step: "pulling_image", label: "Pulling Docker image...", status: "error" },
+                ] satisfies CreationProgressEvent[]}
+                error="Failed to pull docker.io/stangirard/the-companion:latest — connection timed out after 30s"
+              />
+            </Card>
+            <Card label="With streaming init script logs">
+              <SessionCreationProgress
+                steps={[
+                  { step: "resolving_env", label: "Resolving environment...", status: "done" },
+                  { step: "pulling_image", label: "Image ready", status: "done" },
+                  { step: "creating_container", label: "Container running", status: "done" },
+                  { step: "running_init_script", label: "Running init script...", status: "in_progress", detail: "Installing dependencies..." },
+                ] satisfies CreationProgressEvent[]}
+              />
+            </Card>
+            <Card label="With streaming image pull logs">
+              <SessionCreationProgress
+                steps={[
+                  { step: "resolving_env", label: "Resolving environment...", status: "done" },
+                  { step: "pulling_image", label: "Pulling Docker image...", status: "in_progress", detail: "Downloading layer 3/7 [=====>    ] 45%" },
+                ] satisfies CreationProgressEvent[]}
+              />
+            </Card>
+            <Card label="Error during init script">
+              <SessionCreationProgress
+                steps={[
+                  { step: "resolving_env", label: "Resolving environment...", status: "done" },
+                  { step: "pulling_image", label: "Pulling Docker image...", status: "done" },
+                  { step: "creating_container", label: "Starting container...", status: "done" },
+                  { step: "running_init_script", label: "Running init script...", status: "error" },
+                ] satisfies CreationProgressEvent[]}
+                error={"npm ERR! code ENOENT\nnpm ERR! syscall open\nnpm ERR! path /app/package.json"}
+              />
+            </Card>
+          </div>
+        </Section>
+        {/* ─── Session Launch Overlay ──────────────────────────── */}
+        <Section title="Session Launch Overlay" description="Full-screen overlay shown during session creation, replacing the inline progress list">
+          <div className="space-y-4">
+            <Card label="In progress (container session)">
+              <div className="relative h-[360px] bg-cc-bg rounded-lg overflow-hidden border border-cc-border">
+                <SessionLaunchOverlay
+                  steps={[
+                    { step: "resolving_env", label: "Environment resolved", status: "done" },
+                    { step: "pulling_image", label: "Pulling Docker image...", status: "done" },
+                    { step: "creating_container", label: "Starting container...", status: "in_progress" },
+                    { step: "launching_cli", label: "Launching Claude Code...", status: "in_progress" },
+                  ] satisfies CreationProgressEvent[]}
+                  backend="claude"
+                  onCancel={() => {}}
+                />
+              </div>
+            </Card>
+            <Card label="All steps done (launching)">
+              <div className="relative h-[360px] bg-cc-bg rounded-lg overflow-hidden border border-cc-border">
+                <SessionLaunchOverlay
+                  steps={[
+                    { step: "resolving_env", label: "Environment resolved", status: "done" },
+                    { step: "fetching_git", label: "Fetch complete", status: "done" },
+                    { step: "creating_worktree", label: "Worktree created", status: "done" },
+                    { step: "launching_cli", label: "CLI launched", status: "done" },
+                  ] satisfies CreationProgressEvent[]}
+                  backend="claude"
+                />
+              </div>
+            </Card>
+            <Card label="Error state">
+              <div className="relative h-[400px] bg-cc-bg rounded-lg overflow-hidden border border-cc-border">
+                <SessionLaunchOverlay
+                  steps={[
+                    { step: "resolving_env", label: "Environment resolved", status: "done" },
+                    { step: "pulling_image", label: "Pulling Docker image...", status: "error" },
+                  ] satisfies CreationProgressEvent[]}
+                  error="Failed to pull docker.io/stangirard/the-companion:latest — connection timed out after 30s"
+                  backend="claude"
+                  onCancel={() => {}}
+                />
+              </div>
+            </Card>
+            <Card label="Codex backend">
+              <div className="relative h-[320px] bg-cc-bg rounded-lg overflow-hidden border border-cc-border">
+                <SessionLaunchOverlay
+                  steps={[
+                    { step: "resolving_env", label: "Environment resolved", status: "done" },
+                    { step: "launching_cli", label: "Launching Codex...", status: "in_progress" },
+                  ] satisfies CreationProgressEvent[]}
+                  backend="codex"
+                  onCancel={() => {}}
+                />
+              </div>
+            </Card>
+          </div>
+        </Section>
         {/* ─── CLAUDE.md Editor ──────────────────────────────── */}
         <Section title="CLAUDE.md Editor" description="Modal for viewing and editing project CLAUDE.md instructions">
           <div className="space-y-4 max-w-3xl">
             <Card label="Open editor button (from TopBar)">
               <PlaygroundClaudeMdButton />
+            </Card>
+            <Card label="Terminal quick tabs (from TopBar)">
+              <PlaygroundTerminalTabsMock />
             </Card>
           </div>
         </Section>
@@ -1095,6 +1301,68 @@ function Card({ label, children }: { label: string; children: React.ReactNode })
         <span className="text-[10px] text-cc-muted font-mono-code uppercase tracking-wider">{label}</span>
       </div>
       <div className="p-4">{children}</div>
+    </div>
+  );
+}
+
+function PlaygroundTerminalTabsMock() {
+  const tabs = [
+    { id: "host", label: "Terminal", cwd: "/Users/demo/project" },
+    { id: "docker", label: "Docker", cwd: "/workspace" },
+  ];
+  const [active, setActive] = useState("host");
+  const [placement, setPlacement] = useState<"top" | "right" | "bottom" | "left">("bottom");
+
+  return (
+    <div className="rounded-xl border border-cc-border bg-cc-card overflow-hidden">
+      <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-cc-border bg-cc-sidebar">
+        <div className="flex items-center gap-0.5 bg-cc-hover rounded-md p-0.5 mr-1">
+          {(["top", "right", "bottom", "left"] as const).map((p) => (
+            <button
+              key={p}
+              onClick={() => setPlacement(p)}
+              className={`px-2 py-1 rounded text-[10px] font-medium cursor-pointer ${
+                placement === p ? "bg-cc-card text-cc-fg" : "text-cc-muted"
+              }`}
+            >
+              {p[0]?.toUpperCase()}{p.slice(1)}
+            </button>
+          ))}
+        </div>
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActive(tab.id)}
+            className={`px-2 py-1 rounded-md text-[11px] font-medium border cursor-pointer ${
+              active === tab.id
+                ? "text-cc-fg bg-cc-card border-cc-border"
+                : "text-cc-muted border-transparent hover:bg-cc-hover"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+        <span className="text-[11px] font-mono-code text-cc-muted truncate ml-1">
+          {tabs.find((tab) => tab.id === active)?.cwd}
+        </span>
+      </div>
+      <div className="h-32 p-3 bg-cc-bg">
+        <div className={`h-full min-h-0 rounded-lg border border-cc-border bg-cc-card flex ${placement === "left" || placement === "right" ? "flex-row" : "flex-col"}`}>
+          {(placement === "top" || placement === "left") && (
+            <div className={`${placement === "left" ? "w-2/5 border-r" : "h-2/5 border-b"} border-cc-border bg-cc-sidebar/40 flex items-center justify-center text-[10px] text-cc-muted font-mono-code`}>
+              Terminal docked
+            </div>
+          )}
+          <div className="flex-1 min-h-0 flex items-center justify-center text-xs text-cc-muted">
+            Session content
+          </div>
+          {(placement === "right" || placement === "bottom") && (
+            <div className={`${placement === "right" ? "w-2/5 border-l" : "h-2/5 border-t"} border-cc-border bg-cc-sidebar/40 flex items-center justify-center text-[10px] text-cc-muted font-mono-code`}>
+              Terminal docked
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1248,6 +1516,7 @@ function CodexPlaygroundDemo() {
       is_compacting: false,
       git_branch: "main",
       is_worktree: false,
+      is_containerized: false,
       repo_root: "/Users/demo/project",
       git_ahead: 0,
       git_behind: 0,
@@ -1282,6 +1551,28 @@ function CodexPlaygroundDemo() {
       <CodexTokenDetailsSection sessionId={CODEX_DEMO_SESSION} />
     </div>
   );
+}
+
+// ─── Inline UpdateBanner (sets store state for playground preview) ───────────
+
+function PlaygroundUpdateBanner({ updateInfo }: { updateInfo: UpdateInfo }) {
+  useEffect(() => {
+    const prev = useStore.getState().updateInfo;
+    const prevDismissed = useStore.getState().updateDismissedVersion;
+    useStore.getState().setUpdateInfo(updateInfo);
+    // Clear any dismiss so the banner shows
+    if (prevDismissed) {
+      useStore.setState({ updateDismissedVersion: null });
+    }
+    return () => {
+      useStore.getState().setUpdateInfo(prev);
+      if (prevDismissed) {
+        useStore.setState({ updateDismissedVersion: prevDismissed });
+      }
+    };
+  }, [updateInfo]);
+
+  return <UpdateBanner />;
 }
 
 // ─── Inline ClaudeMd Button (opens the real editor modal) ───────────────────

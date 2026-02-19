@@ -16,6 +16,9 @@ import { CliLauncher } from "./cli-launcher.js";
 import { WsBridge } from "./ws-bridge.js";
 import { SessionStore } from "./session-store.js";
 import { WorktreeTracker } from "./worktree-tracker.js";
+import { containerManager } from "./container-manager.js";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import { TerminalManager } from "./terminal-manager.js";
 import { generateSessionTitle } from "./auto-namer.js";
 import * as sessionNames from "./session-names.js";
@@ -23,8 +26,10 @@ import { getSettings } from "./settings-manager.js";
 import { PRPoller } from "./pr-poller.js";
 import { RecorderManager } from "./recorder.js";
 import { CronScheduler } from "./cron-scheduler.js";
-import { AssistantManager } from "./assistant-manager.js";
-import { startPeriodicCheck } from "./update-checker.js";
+
+import { startPeriodicCheck, setServiceMode } from "./update-checker.js";
+import { imagePullManager } from "./image-pull-manager.js";
+import { isRunningAsService } from "./service.js";
 import type { SocketData } from "./ws-bridge.js";
 import type { ServerWebSocket } from "bun";
 
@@ -35,15 +40,15 @@ import { DEFAULT_PORT_DEV, DEFAULT_PORT_PROD } from "./constants.js";
 
 const defaultPort = process.env.NODE_ENV === "production" ? DEFAULT_PORT_PROD : DEFAULT_PORT_DEV;
 const port = Number(process.env.PORT) || defaultPort;
-const sessionStore = new SessionStore();
+const sessionStore = new SessionStore(process.env.COMPANION_SESSION_DIR);
 const wsBridge = new WsBridge();
 const launcher = new CliLauncher(port);
 const worktreeTracker = new WorktreeTracker();
+const CONTAINER_STATE_PATH = join(homedir(), ".companion", "containers.json");
 const terminalManager = new TerminalManager();
 const prPoller = new PRPoller(wsBridge);
 const recorder = new RecorderManager();
 const cronScheduler = new CronScheduler(launcher, wsBridge);
-const assistantManager = new AssistantManager(launcher, wsBridge, port);
 
 // ── Restore persisted sessions from disk ────────────────────────────────────
 wsBridge.setStore(sessionStore);
@@ -52,24 +57,16 @@ launcher.setStore(sessionStore);
 launcher.setRecorder(recorder);
 launcher.restoreFromDisk();
 wsBridge.restoreFromDisk();
+containerManager.restoreState(CONTAINER_STATE_PATH);
 
 // When the CLI reports its internal session_id, store it for --resume on relaunch
 wsBridge.onCLISessionIdReceived((sessionId, cliSessionId) => {
   launcher.setCLISessionId(sessionId, cliSessionId);
-  // Also store for the assistant manager (for --resume across server restarts)
-  if (assistantManager.isAssistantSession(sessionId)) {
-    assistantManager.setCLISessionId(cliSessionId);
-  }
 });
 
 // When a Codex adapter is created, attach it to the WsBridge
 launcher.onCodexAdapterCreated((sessionId, adapter) => {
   wsBridge.attachCodexAdapter(sessionId, adapter);
-});
-
-// When a CLI process exits, notify the assistant manager for auto-relaunch
-launcher.onSessionExited((sessionId) => {
-  assistantManager.handleCliExit(sessionId);
 });
 
 // Start watching PRs when git info is resolved for a session
@@ -87,7 +84,10 @@ wsBridge.onCLIRelaunchNeededCallback(async (sessionId) => {
     relaunchingSet.add(sessionId);
     console.log(`[server] Auto-relaunching CLI for session ${sessionId}`);
     try {
-      await launcher.relaunch(sessionId);
+      const result = await launcher.relaunch(sessionId);
+      if (!result.ok && result.error) {
+        wsBridge.broadcastToSession(sessionId, { type: "error", message: result.error });
+      }
     } finally {
       setTimeout(() => relaunchingSet.delete(sessionId), 5000);
     }
@@ -96,10 +96,8 @@ wsBridge.onCLIRelaunchNeededCallback(async (sessionId) => {
 
 // Auto-generate session title after first turn completes
 wsBridge.onFirstTurnCompletedCallback(async (sessionId, firstUserMessage) => {
-  // Don't overwrite a name that was already set (manual rename, prior auto-name, or assistant)
+  // Don't overwrite a name that was already set (manual rename or prior auto-name)
   if (sessionNames.getName(sessionId)) return;
-  // Skip auto-naming for the assistant session
-  if (assistantManager.isAssistantSession(sessionId)) return;
   if (!getSettings().openrouterApiKey.trim()) return;
   const info = launcher.getSession(sessionId);
   const model = info?.model || "claude-sonnet-4-5-20250929";
@@ -121,7 +119,7 @@ if (recorder.isGloballyEnabled()) {
 const app = new Hono();
 
 app.use("/api/*", cors());
-app.route("/api", createRoutes(launcher, wsBridge, sessionStore, worktreeTracker, terminalManager, prPoller, recorder, cronScheduler, assistantManager));
+app.route("/api", createRoutes(launcher, wsBridge, sessionStore, worktreeTracker, terminalManager, prPoller, recorder, cronScheduler));
 
 // In production, serve built frontend using absolute path (works when installed as npm package)
 if (process.env.NODE_ENV === "production") {
@@ -217,23 +215,30 @@ if (process.env.NODE_ENV !== "production") {
 // ── Cron scheduler ──────────────────────────────────────────────────────────
 cronScheduler.startAll();
 
-// ── Companion Assistant ─────────────────────────────────────────────────────
-const assistantConfig = assistantManager.getConfig();
-if (assistantConfig.enabled) {
-  assistantManager.start().catch((e) => {
-    console.error("[server] Failed to auto-start assistant:", e);
-  });
-}
+// ── Image pull manager — pre-pull missing Docker images for environments ────
+imagePullManager.initFromEnvironments();
 
 // ── Update checker ──────────────────────────────────────────────────────────
-console.log("[server] Starting update checker...");
 startPeriodicCheck();
+if (isRunningAsService()) {
+  setServiceMode(true);
+  console.log("[server] Running as background service (auto-update available)");
+}
+
+// ── Graceful shutdown — persist container state ──────────────────────────────
+function gracefulShutdown() {
+  console.log("[server] Persisting container state before shutdown...");
+  containerManager.persistState(CONTAINER_STATE_PATH);
+  process.exit(0);
+}
+process.on("SIGTERM", gracefulShutdown);
+process.on("SIGINT", gracefulShutdown);
 
 // ── Reconnection watchdog ────────────────────────────────────────────────────
 // After a server restart, restored CLI processes may not reconnect their
 // WebSocket. Give them a grace period, then kill + relaunch any that are
 // still in "starting" state (alive but no WS connection).
-const RECONNECT_GRACE_MS = 10_000;
+const RECONNECT_GRACE_MS = Number(process.env.COMPANION_RECONNECT_GRACE_MS || "30000");
 const starting = launcher.getStartingSessions();
 if (starting.length > 0) {
   console.log(`[server] Waiting ${RECONNECT_GRACE_MS / 1000}s for ${starting.length} CLI process(es) to reconnect...`);

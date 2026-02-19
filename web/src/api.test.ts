@@ -283,7 +283,7 @@ describe("settings", () => {
 // ===========================================================================
 describe("getRepoInfo", () => {
   it("sends GET with encoded path query param", async () => {
-    const info = { repoRoot: "/repo", repoName: "app", currentBranch: "main", defaultBranch: "main", isWorktree: false };
+    const info = { repoRoot: "/repo", repoName: "app", currentBranch: "main", defaultBranch: "main" };
     mockFetch.mockResolvedValueOnce(mockResponse(info));
 
     const result = await api.getRepoInfo("/path/to repo");
@@ -291,23 +291,6 @@ describe("getRepoInfo", () => {
     const [url] = mockFetch.mock.calls[0];
     expect(url).toBe(`/api/git/repo-info?path=${encodeURIComponent("/path/to repo")}`);
     expect(result).toEqual(info);
-  });
-});
-
-// ===========================================================================
-// removeWorktree
-// ===========================================================================
-describe("removeWorktree", () => {
-  it("sends DELETE to /api/git/worktree with body", async () => {
-    mockFetch.mockResolvedValueOnce(mockResponse({ removed: true }));
-
-    await api.removeWorktree("/repo", "/repo-wt", true);
-
-    const [url, opts] = mockFetch.mock.calls[0];
-    expect(url).toBe("/api/git/worktree");
-    expect(opts.method).toBe("DELETE");
-    expect(opts.headers["Content-Type"]).toBe("application/json");
-    expect(JSON.parse(opts.body)).toEqual({ repoRoot: "/repo", worktreePath: "/repo-wt", force: true });
   });
 });
 
@@ -369,5 +352,39 @@ describe("getCloudProviderPlan", () => {
       `/api/cloud/providers/modal/plan?cwd=${encodeURIComponent("/repo")}&sessionId=${encodeURIComponent("s1")}`,
     );
     expect(result).toEqual(plan);
+  });
+});
+
+// ===========================================================================
+// terminal API
+// ===========================================================================
+describe("terminal API", () => {
+  it("spawnTerminal sends cwd, size, and optional containerId", async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse({ terminalId: "term-1" }));
+
+    const result = await api.spawnTerminal("/workspace", 120, 40, { containerId: "abc123" });
+
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toBe("/api/terminal/spawn");
+    expect(opts.method).toBe("POST");
+    expect(JSON.parse(opts.body)).toEqual({
+      cwd: "/workspace",
+      cols: 120,
+      rows: 40,
+      containerId: "abc123",
+    });
+    expect(result).toEqual({ terminalId: "term-1" });
+  });
+
+  it("killTerminal sends terminalId in request body", async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse({ ok: true }));
+
+    const result = await api.killTerminal("term-1");
+
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toBe("/api/terminal/kill");
+    expect(opts.method).toBe("POST");
+    expect(JSON.parse(opts.body)).toEqual({ terminalId: "term-1" });
+    expect(result).toEqual({ ok: true });
   });
 });

@@ -7,9 +7,10 @@ import type {
   BackendType,
   McpServerDetail,
   McpServerConfig,
+  CreationProgressEvent,
 } from "../server/session-types.js";
 
-export type { SessionState, PermissionRequest, ContentBlock, BrowserIncomingMessage, BrowserOutgoingMessage, BackendType, McpServerDetail, McpServerConfig };
+export type { SessionState, PermissionRequest, ContentBlock, BrowserIncomingMessage, BrowserOutgoingMessage, BackendType, McpServerDetail, McpServerConfig, CreationProgressEvent };
 
 export interface ChatMessage {
   id: string;
@@ -44,10 +45,9 @@ export interface SdkSessionInfo {
   cwd: string;
   createdAt: number;
   archived?: boolean;
-  isWorktree?: boolean;
-  repoRoot?: string;
-  branch?: string;
-  actualBranch?: string;
+  containerId?: string;
+  containerName?: string;
+  containerImage?: string;
   name?: string;
   backendType?: BackendType;
   gitBranch?: string;

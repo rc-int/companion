@@ -1,13 +1,23 @@
 import { create } from "zustand";
 import type { SessionState, PermissionRequest, ChatMessage, SdkSessionInfo, TaskItem, McpServerDetail } from "./types.js";
-import type { PRStatusResponse } from "./api.js";
+import type { UpdateInfo, PRStatusResponse, CreationProgressEvent } from "./api.js";
+
+export interface QuickTerminalTab {
+  id: string;
+  label: string;
+  cwd: string;
+  containerId?: string;
+}
+
+export type QuickTerminalPlacement = "top" | "right" | "bottom" | "left";
+
+export type DiffBase = "last-commit" | "default-branch";
 
 interface AppState {
   // Sessions
   sessions: Map<string, SessionState>;
   sdkSessions: SdkSessionInfo[];
   currentSessionId: string | null;
-  assistantSessionId: string | null;
 
   // Messages per session
   messages: Map<string, ChatMessage[]>;
@@ -55,6 +65,20 @@ interface AppState {
   // Sidebar project grouping
   collapsedProjects: Set<string>;
 
+  // Update info
+  updateInfo: UpdateInfo | null;
+  updateDismissedVersion: string | null;
+
+  // Session creation progress (SSE streaming)
+  creationProgress: CreationProgressEvent[] | null;
+  creationError: string | null;
+  sessionCreating: boolean;
+  sessionCreatingBackend: "claude" | "codex" | null;
+  addCreationProgress: (step: CreationProgressEvent) => void;
+  clearCreation: () => void;
+  setSessionCreating: (creating: boolean, backend?: "claude" | "codex") => void;
+  setCreationError: (error: string | null) => void;
+
   // UI
   darkMode: boolean;
   notificationSound: boolean;
@@ -62,7 +86,8 @@ interface AppState {
   sidebarOpen: boolean;
   taskPanelOpen: boolean;
   homeResetKey: number;
-  activeTab: "chat" | "diff";
+  activeTab: "chat" | "diff" | "terminal";
+  chatTabReentryTickBySession: Map<string, number>;
   diffPanelSelectedFile: Map<string, string>;
 
   // Actions
@@ -78,7 +103,6 @@ interface AppState {
 
   // Session actions
   setCurrentSession: (id: string | null) => void;
-  setAssistantSessionId: (id: string | null) => void;
   addSession: (session: SessionState) => void;
   updateSession: (sessionId: string, updates: Partial<SessionState>) => void;
   removeSession: (sessionId: string) => void;
@@ -130,9 +154,36 @@ interface AppState {
   setCliConnected: (sessionId: string, connected: boolean) => void;
   setSessionStatus: (sessionId: string, status: "idle" | "running" | "compacting" | null) => void;
 
+  // Update actions
+  setUpdateInfo: (info: UpdateInfo | null) => void;
+  dismissUpdate: (version: string) => void;
+
   // Diff panel actions
-  setActiveTab: (tab: "chat" | "diff") => void;
+  setActiveTab: (tab: "chat" | "diff" | "terminal") => void;
+  markChatTabReentry: (sessionId: string) => void;
   setDiffPanelSelectedFile: (sessionId: string, filePath: string | null) => void;
+
+  // Session quick terminal (docked in session workspace)
+  quickTerminalOpen: boolean;
+  quickTerminalTabs: QuickTerminalTab[];
+  activeQuickTerminalTabId: string | null;
+  quickTerminalPlacement: QuickTerminalPlacement;
+  quickTerminalNextHostIndex: number;
+  quickTerminalNextDockerIndex: number;
+
+  // Diff settings
+  diffBase: DiffBase;
+
+  // Session quick terminal actions
+  setQuickTerminalOpen: (open: boolean) => void;
+  openQuickTerminal: (opts: { target: "host" | "docker"; cwd: string; containerId?: string; reuseIfExists?: boolean }) => void;
+  closeQuickTerminalTab: (tabId: string) => void;
+  setActiveQuickTerminalTabId: (tabId: string | null) => void;
+  setQuickTerminalPlacement: (placement: QuickTerminalPlacement) => void;
+  resetQuickTerminal: () => void;
+
+  // Diff settings actions
+  setDiffBase: (base: DiffBase) => void;
 
   // Terminal state
   terminalOpen: boolean;
@@ -184,9 +235,9 @@ function getInitialNotificationDesktop(): boolean {
   return false;
 }
 
-function getInitialAssistantSessionId(): string | null {
+function getInitialDismissedVersion(): string | null {
   if (typeof window === "undefined") return null;
-  return localStorage.getItem("cc-assistant-session-id") || null;
+  return localStorage.getItem("cc-update-dismissed") || null;
 }
 
 function getInitialCollapsedProjects(): Set<string> {
@@ -198,11 +249,24 @@ function getInitialCollapsedProjects(): Set<string> {
   }
 }
 
+function getInitialQuickTerminalPlacement(): QuickTerminalPlacement {
+  if (typeof window === "undefined") return "bottom";
+  const stored = window.localStorage.getItem("cc-terminal-placement");
+  if (stored === "top" || stored === "right" || stored === "bottom" || stored === "left") return stored;
+  return "bottom";
+}
+
+function getInitialDiffBase(): DiffBase {
+  if (typeof window === "undefined") return "last-commit";
+  const stored = window.localStorage.getItem("cc-diff-base");
+  if (stored === "last-commit" || stored === "default-branch") return stored;
+  return "last-commit";
+}
+
 export const useStore = create<AppState>((set) => ({
   sessions: new Map(),
   sdkSessions: [],
   currentSessionId: getInitialSessionId(),
-  assistantSessionId: getInitialAssistantSessionId(),
   messages: new Map(),
   streaming: new Map(),
   streamingStartedAt: new Map(),
@@ -220,17 +284,45 @@ export const useStore = create<AppState>((set) => ({
   mcpServers: new Map(),
   toolProgress: new Map(),
   collapsedProjects: getInitialCollapsedProjects(),
+  creationProgress: null,
+  creationError: null,
+  sessionCreating: false,
+  sessionCreatingBackend: null,
+  updateInfo: null,
+  updateDismissedVersion: getInitialDismissedVersion(),
   darkMode: getInitialDarkMode(),
   notificationSound: getInitialNotificationSound(),
   notificationDesktop: getInitialNotificationDesktop(),
   sidebarOpen: typeof window !== "undefined" ? window.innerWidth >= 768 : true,
-  taskPanelOpen: typeof window !== "undefined" ? window.innerWidth >= 1024 : false,
+  taskPanelOpen: typeof window !== "undefined" ? window.innerWidth >= 1024 : true,
   homeResetKey: 0,
   activeTab: "chat",
+  chatTabReentryTickBySession: new Map(),
   diffPanelSelectedFile: new Map(),
+  quickTerminalOpen: false,
+  quickTerminalTabs: [],
+  activeQuickTerminalTabId: null,
+  quickTerminalPlacement: getInitialQuickTerminalPlacement(),
+  quickTerminalNextHostIndex: 1,
+  quickTerminalNextDockerIndex: 1,
+  diffBase: getInitialDiffBase(),
   terminalOpen: false,
   terminalCwd: null,
   terminalId: null,
+
+  addCreationProgress: (step) => set((state) => {
+    const existing = state.creationProgress || [];
+    const idx = existing.findIndex((s) => s.step === step.step);
+    if (idx >= 0) {
+      const updated = [...existing];
+      updated[idx] = step;
+      return { creationProgress: updated };
+    }
+    return { creationProgress: [...existing, step] };
+  }),
+  clearCreation: () => set({ creationProgress: null, creationError: null, sessionCreating: false, sessionCreatingBackend: null }),
+  setSessionCreating: (creating, backend) => set({ sessionCreating: creating, sessionCreatingBackend: backend ?? null }),
+  setCreationError: (error) => set({ creationError: error }),
 
   setDarkMode: (v) => {
     localStorage.setItem("cc-dark-mode", String(v));
@@ -276,15 +368,6 @@ export const useStore = create<AppState>((set) => ({
       localStorage.removeItem("cc-current-session");
     }
     set({ currentSessionId: id });
-  },
-
-  setAssistantSessionId: (id) => {
-    if (id) {
-      localStorage.setItem("cc-assistant-session-id", id);
-    } else {
-      localStorage.removeItem("cc-assistant-session-id");
-    }
-    set({ assistantSessionId: id });
   },
 
   addSession: (session) =>
@@ -596,7 +679,20 @@ export const useStore = create<AppState>((set) => ({
       return { sessionStatus };
     }),
 
+  setUpdateInfo: (info) => set({ updateInfo: info }),
+  dismissUpdate: (version) => {
+    localStorage.setItem("cc-update-dismissed", version);
+    set({ updateDismissedVersion: version });
+  },
+
   setActiveTab: (tab) => set({ activeTab: tab }),
+  markChatTabReentry: (sessionId) =>
+    set((s) => {
+      const chatTabReentryTickBySession = new Map(s.chatTabReentryTickBySession);
+      const nextTick = (chatTabReentryTickBySession.get(sessionId) ?? 0) + 1;
+      chatTabReentryTickBySession.set(sessionId, nextTick);
+      return { chatTabReentryTickBySession };
+    }),
 
   setDiffPanelSelectedFile: (sessionId, filePath) =>
     set((s) => {
@@ -607,6 +703,75 @@ export const useStore = create<AppState>((set) => ({
         diffPanelSelectedFile.delete(sessionId);
       }
       return { diffPanelSelectedFile };
+    }),
+
+  setQuickTerminalOpen: (open) => set({ quickTerminalOpen: open }),
+  openQuickTerminal: (opts) =>
+    set((s) => {
+      if (opts.reuseIfExists) {
+        const existing = s.quickTerminalTabs.find((t) =>
+          t.cwd === opts.cwd
+          && t.containerId === opts.containerId,
+        );
+        if (existing) {
+          return {
+            quickTerminalOpen: true,
+            activeQuickTerminalTabId: existing.id,
+          };
+        }
+      }
+
+      const isDocker = opts.target === "docker";
+      const hostIndex = s.quickTerminalNextHostIndex;
+      const dockerIndex = s.quickTerminalNextDockerIndex;
+      const nextHostIndex = isDocker ? hostIndex : hostIndex + 1;
+      const nextDockerIndex = isDocker ? dockerIndex + 1 : dockerIndex;
+      const nextTab: QuickTerminalTab = {
+        id: `${opts.target}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        label: isDocker
+          ? `Docker ${dockerIndex}`
+          : (hostIndex === 1 ? "Terminal" : `Terminal ${hostIndex}`),
+        cwd: opts.cwd,
+        containerId: opts.containerId,
+      };
+      return {
+        quickTerminalOpen: true,
+        quickTerminalTabs: [...s.quickTerminalTabs, nextTab],
+        activeQuickTerminalTabId: nextTab.id,
+        quickTerminalNextHostIndex: nextHostIndex,
+        quickTerminalNextDockerIndex: nextDockerIndex,
+      };
+    }),
+  closeQuickTerminalTab: (tabId) =>
+    set((s) => {
+      const nextTabs = s.quickTerminalTabs.filter((t) => t.id !== tabId);
+      const nextActive = s.activeQuickTerminalTabId === tabId ? (nextTabs[0]?.id || null) : s.activeQuickTerminalTabId;
+      return {
+        quickTerminalTabs: nextTabs,
+        activeQuickTerminalTabId: nextActive,
+        quickTerminalOpen: nextTabs.length > 0 ? s.quickTerminalOpen : false,
+      };
+    }),
+  setActiveQuickTerminalTabId: (tabId) => set({ activeQuickTerminalTabId: tabId }),
+  setQuickTerminalPlacement: (placement) => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("cc-terminal-placement", placement);
+    }
+    set({ quickTerminalPlacement: placement });
+  },
+  setDiffBase: (base) => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("cc-diff-base", base);
+    }
+    set({ diffBase: base });
+  },
+  resetQuickTerminal: () =>
+    set({
+      quickTerminalOpen: false,
+      quickTerminalTabs: [],
+      activeQuickTerminalTabId: null,
+      quickTerminalNextHostIndex: 1,
+      quickTerminalNextDockerIndex: 1,
     }),
 
   setTerminalOpen: (open) => set({ terminalOpen: open }),
@@ -620,7 +785,6 @@ export const useStore = create<AppState>((set) => ({
       sessions: new Map(),
       sdkSessions: [],
       currentSessionId: null,
-      assistantSessionId: null,
       messages: new Map(),
       streaming: new Map(),
       streamingStartedAt: new Map(),
@@ -638,7 +802,15 @@ export const useStore = create<AppState>((set) => ({
       toolProgress: new Map(),
       prStatus: new Map(),
       activeTab: "chat" as const,
+      chatTabReentryTickBySession: new Map(),
       diffPanelSelectedFile: new Map(),
+      quickTerminalOpen: false,
+      quickTerminalTabs: [],
+      activeQuickTerminalTabId: null,
+      quickTerminalPlacement: getInitialQuickTerminalPlacement(),
+      quickTerminalNextHostIndex: 1,
+      quickTerminalNextDockerIndex: 1,
+      diffBase: getInitialDiffBase(),
       terminalOpen: false,
       terminalCwd: null,
       terminalId: null,

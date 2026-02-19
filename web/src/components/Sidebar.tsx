@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useStore } from "../store.js";
 import { api } from "../api.js";
 import { connectSession, connectAllSessions, disconnectSession } from "../ws.js";
+import { navigateToSession, navigateHome, parseHash } from "../utils/routing.js";
 import { ProjectGroup } from "./ProjectGroup.js";
 import { SessionItem } from "./SessionItem.js";
 import { groupSessionsByProject, type SessionItem as SessionItemType } from "../utils/project-grouping.js";
@@ -24,14 +25,14 @@ export function Sidebar() {
   const recentlyRenamed = useStore((s) => s.recentlyRenamed);
   const clearRecentlyRenamed = useStore((s) => s.clearRecentlyRenamed);
   const pendingPermissions = useStore((s) => s.pendingPermissions);
-  const assistantSessionId = useStore((s) => s.assistantSessionId);
-  const setAssistantSessionId = useStore((s) => s.setAssistantSessionId);
   const collapsedProjects = useStore((s) => s.collapsedProjects);
   const toggleProjectCollapse = useStore((s) => s.toggleProjectCollapse);
-  const isSettingsPage = hash === "#/settings";
-  const isTerminalPage = hash === "#/terminal";
-  const isEnvironmentsPage = hash === "#/environments";
-  const isScheduledPage = hash === "#/scheduled";
+  const route = parseHash(hash);
+  const isSettingsPage = route.page === "settings";
+  const isPromptsPage = route.page === "prompts";
+  const isTerminalPage = route.page === "terminal";
+  const isEnvironmentsPage = route.page === "environments";
+  const isScheduledPage = route.page === "scheduled";
 
   // Poll for SDK sessions on mount
   useEffect(() => {
@@ -70,20 +71,6 @@ export function Sidebar() {
     };
   }, []);
 
-  // Hydrate assistant session ID from server on mount
-  useEffect(() => {
-    api.getAssistantStatus().then((status) => {
-      if (status.running && status.sessionId) {
-        useStore.getState().setAssistantSessionId(status.sessionId);
-      } else {
-        // Clear stale session ID if the assistant is not running
-        useStore.getState().setAssistantSessionId(null);
-      }
-    }).catch(() => {
-      // server not ready
-    });
-  }, []);
-
   useEffect(() => {
     const onHashChange = () => setHash(window.location.hash);
     window.addEventListener("hashchange", onHashChange);
@@ -92,11 +79,8 @@ export function Sidebar() {
 
   function handleSelectSession(sessionId: string) {
     useStore.getState().closeTerminal();
-    window.location.hash = "";
-    if (currentSessionId === sessionId) return;
-    setCurrentSession(sessionId);
-    // Ensure connected (idempotent — no-op if already connected)
-    connectSession(sessionId);
+    // Navigate to session hash — App.tsx hash effect handles setCurrentSession + connectSession
+    navigateToSession(sessionId);
     // Close sidebar on mobile
     if (window.innerWidth < 768) {
       useStore.getState().setSidebarOpen(false);
@@ -105,7 +89,7 @@ export function Sidebar() {
 
   function handleNewSession() {
     useStore.getState().closeTerminal();
-    window.location.hash = "";
+    navigateHome();
     useStore.getState().newSession();
     if (window.innerWidth < 768) {
       useStore.getState().setSidebarOpen(false);
@@ -147,16 +131,19 @@ export function Sidebar() {
     } catch {
       // best-effort
     }
+    if (useStore.getState().currentSessionId === sessionId) {
+      navigateHome();
+    }
     removeSession(sessionId);
   }, [removeSession]);
 
   const handleArchiveSession = useCallback((e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
-    // Check if session uses a worktree — if so, ask for confirmation
+    // Check if session uses a container — if so, ask for confirmation
     const sdkInfo = sdkSessions.find((s) => s.sessionId === sessionId);
     const bridgeState = sessions.get(sessionId);
-    const isWorktree = bridgeState?.is_worktree || sdkInfo?.isWorktree || false;
-    if (isWorktree) {
+    const isContainerized = bridgeState?.is_containerized || !!sdkInfo?.containerId || false;
+    if (isContainerized) {
       setConfirmArchiveId(sessionId);
       return;
     }
@@ -171,6 +158,7 @@ export function Sidebar() {
       // best-effort
     }
     if (useStore.getState().currentSessionId === sessionId) {
+      navigateHome();
       useStore.getState().newSession();
     }
     try {
@@ -220,7 +208,7 @@ export function Sidebar() {
       model: bridgeState?.model || sdkInfo?.model || "",
       cwd: bridgeState?.cwd || sdkInfo?.cwd || "",
       gitBranch: bridgeState?.git_branch || sdkInfo?.gitBranch || "",
-      isWorktree: bridgeState?.is_worktree || sdkInfo?.isWorktree || false,
+      isContainerized: bridgeState?.is_containerized || !!sdkInfo?.containerId || false,
       gitAhead: bridgeState?.git_ahead || sdkInfo?.gitAhead || 0,
       gitBehind: bridgeState?.git_behind || sdkInfo?.gitBehind || 0,
       linesAdded: bridgeState?.total_lines_added || sdkInfo?.totalLinesAdded || 0,
@@ -231,17 +219,19 @@ export function Sidebar() {
       createdAt: sdkInfo?.createdAt ?? 0,
       archived: sdkInfo?.archived ?? false,
       backendType: bridgeState?.backend_type || sdkInfo?.backendType || "claude",
-      repoRoot: bridgeState?.repo_root || sdkInfo?.repoRoot || "",
+      repoRoot: bridgeState?.repo_root || "",
       permCount: pendingPermissions.get(id)?.size ?? 0,
       cronJobId: bridgeState?.cronJobId || sdkInfo?.cronJobId,
       cronJobName: bridgeState?.cronJobName || sdkInfo?.cronJobName,
     };
   }).sort((a, b) => b.createdAt - a.createdAt);
 
-  const activeSessions = allSessionList.filter((s) => !s.archived && s.id !== assistantSessionId);
-  const archivedSessions = allSessionList.filter((s) => s.archived && s.id !== assistantSessionId);
+  const activeSessions = allSessionList.filter((s) => !s.archived && !s.cronJobId);
+  const cronSessions = allSessionList.filter((s) => !s.archived && !!s.cronJobId);
+  const archivedSessions = allSessionList.filter((s) => s.archived);
   const currentSession = currentSessionId ? allSessionList.find((s) => s.id === currentSessionId) : null;
   const logoSrc = currentSession?.backendType === "codex" ? "/logo-codex.svg" : "/logo.svg";
+  const [showCronSessions, setShowCronSessions] = useState(true);
 
   // Group active sessions by project
   const projectGroups = useMemo(
@@ -284,71 +274,9 @@ export function Sidebar() {
           New Session
         </button>
 
-        {(() => {
-          const isActive = !!(currentSessionId === assistantSessionId && assistantSessionId);
-          const isAlive = !!(assistantSessionId && cliConnected.get(assistantSessionId));
-          return (
-            <button
-              onClick={async () => {
-                useStore.getState().closeTerminal();
-                window.location.hash = "";
-                if (assistantSessionId) {
-                  handleSelectSession(assistantSessionId);
-                } else {
-                  try {
-                    const result = await api.launchAssistant();
-                    if (result.sessionId) {
-                      setAssistantSessionId(result.sessionId);
-                      connectSession(result.sessionId);
-                      setCurrentSession(result.sessionId);
-                    }
-                  } catch (e) {
-                    console.error("[sidebar] Failed to launch assistant:", e);
-                  }
-                }
-                if (window.innerWidth < 768) {
-                  useStore.getState().setSidebarOpen(false);
-                }
-              }}
-              className={`companion-btn ${isActive ? "companion-active" : ""} group/companion w-full mt-2.5 py-2.5 px-3 rounded-[12px] transition-all duration-300 flex items-center gap-3 cursor-pointer relative ${
-                isActive
-                  ? "bg-cc-primary/[0.06] text-cc-fg"
-                  : "text-cc-muted hover:text-cc-fg"
-              }`}
-            >
-              {/* Icon — constellation sparkle */}
-              <span className={`relative flex items-center justify-center w-7 h-7 rounded-[8px] transition-all duration-300 ${
-                isAlive ? "companion-sparkle-active" : ""
-              } ${
-                isActive
-                  ? "bg-cc-primary text-white shadow-[0_2px_8px_rgba(174,86,48,0.3)]"
-                  : "bg-cc-primary/10 text-cc-primary group-hover/companion:bg-cc-primary/15 group-hover/companion:shadow-[0_1px_4px_rgba(174,86,48,0.15)]"
-              }`}>
-                <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
-                  <path d="M8 0c.2 2.7 1.4 5 3.5 6.5C13.7 8 16 8 16 8s-2.3.2-4.5 1.5C9.4 11 8.2 13.3 8 16c-.2-2.7-1.4-5-3.5-6.5C2.3 8.2 0 8 0 8s2.3-.2 4.5-1.5C6.6 5 7.8 2.7 8 0z" />
-                </svg>
-              </span>
-
-              {/* Label + subtitle */}
-              <div className="flex flex-col min-w-0">
-                <span className="text-[13px] font-semibold leading-tight tracking-tight">Companion</span>
-                {isAlive ? (
-                  <span className="text-[10px] text-cc-success leading-tight mt-0.5 flex items-center gap-1">
-                    <span className="w-1 h-1 rounded-full bg-cc-success inline-block" />
-                    online
-                  </span>
-                ) : assistantSessionId ? (
-                  <span className="text-[10px] text-cc-muted leading-tight mt-0.5">offline</span>
-                ) : (
-                  <span className="text-[10px] text-cc-muted leading-tight mt-0.5">click to start</span>
-                )}
-              </div>
-            </button>
-          );
-        })()}
       </div>
 
-      {/* Worktree archive confirmation */}
+      {/* Container archive confirmation */}
       {confirmArchiveId && (
         <div className="mx-2 mb-1 p-2.5 rounded-[10px] bg-amber-500/10 border border-amber-500/20">
           <div className="flex items-start gap-2">
@@ -357,7 +285,7 @@ export function Sidebar() {
             </svg>
             <div className="flex-1 min-w-0">
               <p className="text-[11px] text-cc-fg leading-snug">
-                Archiving will <strong>delete the worktree</strong> and any uncommitted changes.
+                Archiving will <strong>remove the container</strong> and any uncommitted changes.
               </p>
               <div className="flex gap-2 mt-2">
                 <button
@@ -380,7 +308,7 @@ export function Sidebar() {
 
       {/* Session list */}
       <div className="flex-1 overflow-y-auto px-2 pb-2">
-        {activeSessions.length === 0 && archivedSessions.length === 0 ? (
+        {activeSessions.length === 0 && cronSessions.length === 0 && archivedSessions.length === 0 ? (
           <p className="px-3 py-8 text-xs text-cc-muted text-center leading-relaxed">
             No sessions yet.
           </p>
@@ -400,6 +328,38 @@ export function Sidebar() {
                 {...sessionItemProps}
               />
             ))}
+
+            {cronSessions.length > 0 && (
+              <div className="mt-2 pt-2 border-t border-cc-border">
+                <button
+                  onClick={() => setShowCronSessions(!showCronSessions)}
+                  className="w-full px-3 py-1.5 text-[11px] font-medium text-violet-400 uppercase tracking-wider flex items-center gap-1.5 hover:text-violet-300 transition-colors cursor-pointer"
+                >
+                  <svg viewBox="0 0 16 16" fill="currentColor" className={`w-3 h-3 transition-transform ${showCronSessions ? "rotate-90" : ""}`}>
+                    <path d="M6 4l4 4-4 4" />
+                  </svg>
+                  <svg viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3 opacity-60">
+                    <path d="M8 2a6 6 0 100 12A6 6 0 008 2zM0 8a8 8 0 1116 0A8 8 0 010 8zm9-3a1 1 0 10-2 0v3a1 1 0 00.293.707l2 2a1 1 0 001.414-1.414L9 7.586V5z" />
+                  </svg>
+                  Scheduled Runs ({cronSessions.length})
+                </button>
+                {showCronSessions && (
+                  <div className="space-y-0.5 mt-1">
+                    {cronSessions.map((s) => (
+                      <SessionItem
+                        key={s.id}
+                        session={s}
+                        isActive={currentSessionId === s.id}
+                        sessionName={sessionNames.get(s.id)}
+                        permCount={pendingPermissions.get(s.id)?.size ?? 0}
+                        isRecentlyRenamed={recentlyRenamed.has(s.id)}
+                        {...sessionItemProps}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {archivedSessions.length > 0 && (
               <div className="mt-2 pt-2 border-t border-cc-border">
@@ -436,6 +396,22 @@ export function Sidebar() {
 
       {/* Footer */}
       <div className="p-3 border-t border-cc-border space-y-0.5">
+        <button
+          onClick={() => {
+            useStore.getState().closeTerminal();
+            window.location.hash = "#/prompts";
+          }}
+          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-[10px] text-sm transition-colors cursor-pointer ${
+            isPromptsPage
+              ? "bg-cc-active text-cc-fg"
+              : "text-cc-muted hover:text-cc-fg hover:bg-cc-hover"
+          }`}
+        >
+          <svg viewBox="0 0 16 16" fill="currentColor" className="w-4 h-4">
+            <path d="M3 2.5A1.5 1.5 0 014.5 1h5.879c.398 0 .779.158 1.06.44l1.621 1.62c.281.282.44.663.44 1.061V13.5A1.5 1.5 0 0112 15H4.5A1.5 1.5 0 013 13.5v-11zM4.5 2a.5.5 0 00-.5.5v11a.5.5 0 00.5.5H12a.5.5 0 00.5-.5V4.121a.5.5 0 00-.146-.353l-1.621-1.621A.5.5 0 0010.379 2H4.5zm1.25 4.25a.75.75 0 01.75-.75h3a.75.75 0 010 1.5h-3a.75.75 0 01-.75-.75zm0 3a.75.75 0 01.75-.75h3.5a.75.75 0 010 1.5H6.5a.75.75 0 01-.75-.75z" />
+          </svg>
+          <span>Prompts</span>
+        </button>
         <button
           onClick={() => {
             window.location.hash = "#/terminal";

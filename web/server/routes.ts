@@ -1,29 +1,40 @@
 import { Hono } from "hono";
+import { streamSSE, type SSEStreamingApi } from "hono/streaming";
 import { execSync } from "node:child_process";
 import { resolveBinary } from "./path-resolver.js";
 import { readdir, readFile, writeFile, stat } from "node:fs/promises";
 import { resolve, join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import type { CliLauncher } from "./cli-launcher.js";
 import type { WsBridge } from "./ws-bridge.js";
 import type { SessionStore } from "./session-store.js";
 import type { WorktreeTracker } from "./worktree-tracker.js";
 import type { TerminalManager } from "./terminal-manager.js";
 import * as envManager from "./env-manager.js";
+import * as promptManager from "./prompt-manager.js";
 import * as cronStore from "./cron-store.js";
 import * as gitUtils from "./git-utils.js";
 import * as sessionNames from "./session-names.js";
-import { containerManager, type ContainerConfig, type ContainerInfo } from "./container-manager.js";
+import { containerManager, ContainerManager, type ContainerConfig, type ContainerInfo } from "./container-manager.js";
+import type { CreationStepId } from "./session-types.js";
+import { hasContainerClaudeAuth } from "./claude-container-auth.js";
+import { hasContainerCodexAuth } from "./codex-container-auth.js";
 import { DEFAULT_OPENROUTER_MODEL, getSettings, updateSettings } from "./settings-manager.js";
 import { getUsageLimits } from "./usage-limits.js";
 import {
   getUpdateState,
   checkForUpdate,
+  isUpdateAvailable,
+  setUpdateInProgress,
 } from "./update-checker.js";
-import type { AssistantManager } from "./assistant-manager.js";
+import { refreshServiceDefinition } from "./service.js";
+import { imagePullManager } from "./image-pull-manager.js";
 
-const UPDATE_CHECK_STALE_MS = 5 * 60 * 1000; // informational staleness threshold
+const UPDATE_CHECK_STALE_MS = 5 * 60 * 1000;
+const ROUTES_DIR = dirname(fileURLToPath(import.meta.url));
+const WEB_DIR = dirname(ROUTES_DIR);
 
 function execCaptureStdout(
   command: string,
@@ -76,7 +87,6 @@ export function createRoutes(
   prPoller?: import("./pr-poller.js").PRPoller,
   recorder?: import("./recorder.js").RecorderManager,
   cronScheduler?: import("./cron-scheduler.js").CronScheduler,
-  assistantManager?: AssistantManager,
 ) {
   const api = new Hono();
 
@@ -108,29 +118,22 @@ export function createRoutes(
       }
 
       let cwd = body.cwd;
-      let worktreeInfo:
-        | {
-            isWorktree: boolean;
-            repoRoot: string;
-            branch: string;
-            actualBranch: string;
-            worktreePath: string;
-          }
-        | undefined;
+      let worktreeInfo: { isWorktree: boolean; repoRoot: string; branch: string; actualBranch: string; worktreePath: string } | undefined;
 
-      // If worktree is requested, set up a worktree for the selected branch
+      // Validate branch name to prevent command injection via shell metacharacters
+      if (body.branch && !/^[a-zA-Z0-9/_.\-]+$/.test(body.branch)) {
+        return c.json({ error: "Invalid branch name" }, 400);
+      }
+
       if (body.useWorktree && body.branch && cwd) {
+        // Worktree isolation: create/reuse a worktree for the selected branch
         const repoInfo = gitUtils.getRepoInfo(cwd);
         if (repoInfo) {
-          const result = gitUtils.ensureWorktree(
-            repoInfo.repoRoot,
-            body.branch,
-            {
-              baseBranch: repoInfo.defaultBranch,
-              createBranch: body.createBranch,
-              forceNew: true,
-            },
-          );
+          const result = gitUtils.ensureWorktree(repoInfo.repoRoot, body.branch, {
+            baseBranch: repoInfo.defaultBranch,
+            createBranch: body.createBranch,
+            forceNew: true,
+          });
           cwd = result.worktreePath;
           worktreeInfo = {
             isWorktree: true,
@@ -141,7 +144,7 @@ export function createRoutes(
           };
         }
       } else if (body.branch && cwd) {
-        // Non-worktree: checkout the selected branch in-place
+        // Non-worktree: checkout the selected branch in-place (lightweight)
         const repoInfo = gitUtils.getRepoInfo(cwd);
         if (repoInfo) {
           const fetchResult = gitUtils.gitFetch(repoInfo.repoRoot);
@@ -155,26 +158,126 @@ export function createRoutes(
 
           const pullResult = gitUtils.gitPull(repoInfo.repoRoot);
           if (!pullResult.success) {
-            // Don't fail session creation if pull fails (e.g. no upstream tracking)
             console.warn(`[routes] git pull warning (non-fatal): ${pullResult.output}`);
           }
         }
       }
 
-      // If container mode requested, create and start the container
+      // Resolve Docker image from environment or explicit container config
+      const companionEnv = body.envSlug ? envManager.getEnv(body.envSlug) : null;
+      let effectiveImage = companionEnv
+        ? (body.envSlug ? envManager.getEffectiveImage(body.envSlug) : null)
+        : (body.container?.image || null);
+
       let containerInfo: ContainerInfo | undefined;
-      if (body.container && backend === "claude") {
+      let containerId: string | undefined;
+      let containerName: string | undefined;
+      let containerImage: string | undefined;
+
+      // Containers cannot use host keychain auth.
+      // Fail fast with a clear error when no container-compatible auth is present.
+      if (effectiveImage && backend === "claude" && !hasContainerClaudeAuth(envVars)) {
+        return c.json({
+          error:
+            "Containerized Claude requires auth available inside the container. " +
+            "Set ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN / CLAUDE_CODE_AUTH_TOKEN) in the selected environment.",
+        }, 400);
+      }
+      if (effectiveImage && backend === "codex" && !hasContainerCodexAuth(envVars)) {
+        return c.json({
+          error:
+            "Containerized Codex requires auth available inside the container. " +
+            "Set OPENAI_API_KEY in the selected environment, or ensure ~/.codex/auth.json exists on the host.",
+        }, 400);
+      }
+
+      // Create container if a Docker image is available.
+      // Do not silently fall back to host execution: if container startup fails,
+      // return an explicit error.
+      if (effectiveImage) {
+        if (!imagePullManager.isReady(effectiveImage)) {
+          // Image not available — use the pull manager to get it
+          const pullState = imagePullManager.getState(effectiveImage);
+          if (pullState.status === "idle" || pullState.status === "error") {
+            imagePullManager.ensureImage(effectiveImage);
+          }
+          const ready = await imagePullManager.waitForReady(effectiveImage, 300_000);
+          if (!ready) {
+            const state = imagePullManager.getState(effectiveImage);
+            return c.json({
+              error: state.error
+                || `Docker image ${effectiveImage} could not be pulled or built. Use the environment manager to pull/build the image first.`,
+            }, 503);
+          }
+        }
+
+        const tempId = crypto.randomUUID().slice(0, 8);
         const cConfig: ContainerConfig = {
-          image: body.container.image || "companion-dev:latest",
-          ports: Array.isArray(body.container.ports)
-            ? body.container.ports.map(Number).filter((n: number) => n > 0)
-            : [],
-          volumes: body.container.volumes,
-          env: body.container.env,
+          image: effectiveImage,
+          ports: companionEnv?.ports
+            ?? (Array.isArray(body.container?.ports)
+              ? body.container.ports.map(Number).filter((n: number) => n > 0)
+              : []),
+          volumes: companionEnv?.volumes ?? body.container?.volumes,
+          env: envVars,
         };
-        // Use cwd-based name since we don't have sessionId yet
-        const containerId = crypto.randomUUID().slice(0, 8);
-        containerInfo = containerManager.createContainer(containerId, cwd, cConfig);
+        try {
+          containerInfo = containerManager.createContainer(tempId, cwd, cConfig);
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          return c.json({
+            error:
+              `Docker is required to run this environment image (${effectiveImage}) ` +
+              `but container startup failed: ${reason}`,
+          }, 503);
+        }
+        containerId = containerInfo.containerId;
+        containerName = containerInfo.name;
+        containerImage = effectiveImage;
+
+        // Copy workspace files into the container's isolated volume
+        try {
+          await containerManager.copyWorkspaceToContainer(containerInfo.containerId, cwd);
+          containerManager.reseedGitAuth(containerInfo.containerId);
+        } catch (err) {
+          containerManager.removeContainer(tempId);
+          const reason = err instanceof Error ? err.message : String(err);
+          return c.json({
+            error: `Failed to copy workspace to container: ${reason}`,
+          }, 503);
+        }
+
+        // Run per-environment init script if configured
+        if (companionEnv?.initScript?.trim()) {
+          try {
+            console.log(`[routes] Running init script for env "${companionEnv.name}" in container ${containerInfo.name}...`);
+            const initTimeout = Number(process.env.COMPANION_INIT_SCRIPT_TIMEOUT) || 120_000;
+            const result = await containerManager.execInContainerAsync(
+              containerInfo.containerId,
+              ["sh", "-lc", companionEnv.initScript],
+              { timeout: initTimeout },
+            );
+            if (result.exitCode !== 0) {
+              console.error(
+                `[routes] Init script failed for env "${companionEnv.name}" (exit ${result.exitCode}):\n${result.output}`,
+              );
+              containerManager.removeContainer(tempId);
+              const truncated = result.output.length > 2000
+                ? result.output.slice(0, 500) + "\n...[truncated]...\n" + result.output.slice(-1500)
+                : result.output;
+              return c.json({
+                error: `Init script failed (exit ${result.exitCode}):\n${truncated}`,
+              }, 503);
+            }
+            console.log(`[routes] Init script completed successfully for env "${companionEnv.name}"`);
+          } catch (e) {
+            containerManager.removeContainer(tempId);
+            const reason = e instanceof Error ? e.message : String(e);
+            return c.json({
+              error: `Init script execution failed: ${reason}`,
+            }, 503);
+          }
+        }
       }
 
       const session = launcher.launch({
@@ -190,13 +293,17 @@ export function createRoutes(
         allowedTools: body.allowedTools,
         env: envVars,
         backendType: backend,
-        worktreeInfo,
+        containerId,
+        containerName,
+        containerImage,
+        containerCwd: containerInfo?.containerCwd,
       });
 
-      // Re-track container with real session ID
+      // Re-track container with real session ID and mark session as containerized
+      // so the bridge preserves the host cwd for sidebar grouping
       if (containerInfo) {
-        // The container was created with a temp ID; re-register under the real session ID
         containerManager.retrack(containerInfo.containerId, session.sessionId);
+        wsBridge.markContainerized(session.sessionId, cwd);
       }
 
       // Track the worktree mapping
@@ -217,6 +324,333 @@ export function createRoutes(
       console.error("[routes] Failed to create session:", msg);
       return c.json({ error: msg }, 500);
     }
+  });
+
+  // ─── SSE Session Creation (with progress streaming) ─────────────────────
+
+  api.post("/sessions/create-stream", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+
+    const emitProgress = (
+      stream: SSEStreamingApi,
+      step: CreationStepId,
+      label: string,
+      status: "in_progress" | "done" | "error",
+      detail?: string,
+    ) =>
+      stream.writeSSE({
+        event: "progress",
+        data: JSON.stringify({ step, label, status, detail }),
+      });
+
+    return streamSSE(c, async (stream) => {
+      try {
+        const backend = body.backend ?? "claude";
+        if (backend !== "claude" && backend !== "codex") {
+          await stream.writeSSE({
+            event: "error",
+            data: JSON.stringify({ error: `Invalid backend: ${String(backend)}` }),
+          });
+          return;
+        }
+
+        // --- Step: Resolve environment ---
+        await emitProgress(stream, "resolving_env", "Resolving environment...", "in_progress");
+
+        let envVars: Record<string, string> | undefined = body.env;
+        const companionEnv = body.envSlug ? envManager.getEnv(body.envSlug) : null;
+        if (body.envSlug && companionEnv) {
+          envVars = { ...companionEnv.variables, ...body.env };
+        }
+
+        await emitProgress(stream, "resolving_env", "Environment resolved", "done");
+
+        let cwd = body.cwd;
+        let worktreeInfo: { isWorktree: boolean; repoRoot: string; branch: string; actualBranch: string; worktreePath: string } | undefined;
+
+        // Validate branch name
+        if (body.branch && !/^[a-zA-Z0-9/_.\-]+$/.test(body.branch)) {
+          await stream.writeSSE({
+            event: "error",
+            data: JSON.stringify({ error: "Invalid branch name", step: "checkout_branch" }),
+          });
+          return;
+        }
+
+        // --- Step: Git operations ---
+        if (body.useWorktree && body.branch && cwd) {
+          await emitProgress(stream, "creating_worktree", "Creating worktree...", "in_progress");
+          const repoInfo = gitUtils.getRepoInfo(cwd);
+          if (repoInfo) {
+            const result = gitUtils.ensureWorktree(repoInfo.repoRoot, body.branch, {
+              baseBranch: repoInfo.defaultBranch,
+              createBranch: body.createBranch,
+              forceNew: true,
+            });
+            cwd = result.worktreePath;
+            worktreeInfo = {
+              isWorktree: true,
+              repoRoot: repoInfo.repoRoot,
+              branch: body.branch,
+              actualBranch: result.actualBranch,
+              worktreePath: result.worktreePath,
+            };
+          }
+          await emitProgress(stream, "creating_worktree", "Worktree ready", "done");
+        } else if (body.branch && cwd) {
+          const repoInfo = gitUtils.getRepoInfo(cwd);
+          if (repoInfo) {
+            await emitProgress(stream, "fetching_git", "Fetching from remote...", "in_progress");
+            const fetchResult = gitUtils.gitFetch(repoInfo.repoRoot);
+            if (!fetchResult.success) {
+              await stream.writeSSE({
+                event: "error",
+                data: JSON.stringify({ error: `git fetch failed: ${fetchResult.output}`, step: "fetching_git" }),
+              });
+              return;
+            }
+            await emitProgress(stream, "fetching_git", "Fetch complete", "done");
+
+            if (repoInfo.currentBranch !== body.branch) {
+              await emitProgress(stream, "checkout_branch", `Checking out ${body.branch}...`, "in_progress");
+              gitUtils.checkoutBranch(repoInfo.repoRoot, body.branch);
+              await emitProgress(stream, "checkout_branch", `On branch ${body.branch}`, "done");
+            }
+
+            await emitProgress(stream, "pulling_git", "Pulling latest changes...", "in_progress");
+            const pullResult = gitUtils.gitPull(repoInfo.repoRoot);
+            if (!pullResult.success) {
+              console.warn(`[routes] git pull warning (non-fatal): ${pullResult.output}`);
+            }
+            await emitProgress(stream, "pulling_git", "Up to date", "done");
+          }
+        }
+
+        // --- Step: Docker image resolution ---
+        let effectiveImage = companionEnv
+          ? (body.envSlug ? envManager.getEffectiveImage(body.envSlug) : null)
+          : (body.container?.image || null);
+
+        let containerInfo: ContainerInfo | undefined;
+        let containerId: string | undefined;
+        let containerName: string | undefined;
+        let containerImage: string | undefined;
+
+        // Auth check for containerized sessions
+        if (effectiveImage && backend === "claude" && !hasContainerClaudeAuth(envVars)) {
+          await stream.writeSSE({
+            event: "error",
+            data: JSON.stringify({
+              error:
+                "Containerized Claude requires auth available inside the container. " +
+                "Set ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN / CLAUDE_CODE_AUTH_TOKEN) in the selected environment.",
+            }),
+          });
+          return;
+        }
+        if (effectiveImage && backend === "codex" && !hasContainerCodexAuth(envVars)) {
+          await stream.writeSSE({
+            event: "error",
+            data: JSON.stringify({
+              error:
+                "Containerized Codex requires auth available inside the container. " +
+                "Set OPENAI_API_KEY in the selected environment, or ensure ~/.codex/auth.json exists on the host.",
+            }),
+          });
+          return;
+        }
+
+        if (effectiveImage) {
+          if (!imagePullManager.isReady(effectiveImage)) {
+            // Image not available — wait for background pull with progress streaming
+            const pullState = imagePullManager.getState(effectiveImage);
+            if (pullState.status === "idle" || pullState.status === "error") {
+              imagePullManager.ensureImage(effectiveImage);
+            }
+
+            await emitProgress(stream, "pulling_image", "Pulling Docker image...", "in_progress");
+
+            // Stream pull progress lines to the client
+            const unsub = imagePullManager.onProgress(effectiveImage, (line) => {
+              emitProgress(stream, "pulling_image", "Pulling Docker image...", "in_progress", line).catch(() => {});
+            });
+
+            const ready = await imagePullManager.waitForReady(effectiveImage, 300_000);
+            unsub();
+
+            if (ready) {
+              await emitProgress(stream, "pulling_image", "Image ready", "done");
+            } else {
+              const state = imagePullManager.getState(effectiveImage);
+              await stream.writeSSE({
+                event: "error",
+                data: JSON.stringify({
+                  error: state.error
+                    || `Docker image ${effectiveImage} could not be pulled or built. Use the environment manager to pull/build the image first.`,
+                  step: "pulling_image",
+                }),
+              });
+              return;
+            }
+          }
+
+          // --- Step: Create container ---
+          await emitProgress(stream, "creating_container", "Starting container...", "in_progress");
+          const tempId = crypto.randomUUID().slice(0, 8);
+          const cConfig: ContainerConfig = {
+            image: effectiveImage,
+            ports: companionEnv?.ports
+              ?? (Array.isArray(body.container?.ports)
+                ? body.container.ports.map(Number).filter((n: number) => n > 0)
+                : []),
+            volumes: companionEnv?.volumes ?? body.container?.volumes,
+            env: envVars,
+          };
+          try {
+            containerInfo = containerManager.createContainer(tempId, cwd, cConfig);
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err);
+            await stream.writeSSE({
+              event: "error",
+              data: JSON.stringify({
+                error: `Container startup failed: ${reason}`,
+                step: "creating_container",
+              }),
+            });
+            return;
+          }
+          containerId = containerInfo.containerId;
+          containerName = containerInfo.name;
+          containerImage = effectiveImage;
+          await emitProgress(stream, "creating_container", "Container running", "done");
+
+          // --- Step: Copy workspace into isolated volume ---
+          await emitProgress(stream, "copying_workspace", "Copying workspace files...", "in_progress");
+          try {
+            await containerManager.copyWorkspaceToContainer(containerInfo.containerId, cwd);
+            containerManager.reseedGitAuth(containerInfo.containerId);
+            await emitProgress(stream, "copying_workspace", "Workspace copied", "done");
+          } catch (err) {
+            containerManager.removeContainer(tempId);
+            const reason = err instanceof Error ? err.message : String(err);
+            await stream.writeSSE({
+              event: "error",
+              data: JSON.stringify({
+                error: `Failed to copy workspace: ${reason}`,
+                step: "copying_workspace",
+              }),
+            });
+            return;
+          }
+
+          // --- Step: Init script ---
+          if (companionEnv?.initScript?.trim()) {
+            await emitProgress(stream, "running_init_script", "Running init script...", "in_progress");
+            try {
+              const initTimeout = Number(process.env.COMPANION_INIT_SCRIPT_TIMEOUT) || 120_000;
+              const result = await containerManager.execInContainerAsync(
+                containerInfo.containerId,
+                ["sh", "-lc", companionEnv.initScript],
+                {
+                  timeout: initTimeout,
+                  onOutput: (line) => {
+                    emitProgress(stream, "running_init_script", "Running init script...", "in_progress", line).catch(() => {});
+                  },
+                },
+              );
+              if (result.exitCode !== 0) {
+                console.error(
+                  `[routes] Init script failed for env "${companionEnv.name}" (exit ${result.exitCode}):\n${result.output}`,
+                );
+                containerManager.removeContainer(tempId);
+                const truncated = result.output.length > 2000
+                  ? result.output.slice(0, 500) + "\n...[truncated]...\n" + result.output.slice(-1500)
+                  : result.output;
+                await stream.writeSSE({
+                  event: "error",
+                  data: JSON.stringify({
+                    error: `Init script failed (exit ${result.exitCode}):\n${truncated}`,
+                    step: "running_init_script",
+                  }),
+                });
+                return;
+              }
+              await emitProgress(stream, "running_init_script", "Init script complete", "done");
+            } catch (e) {
+              containerManager.removeContainer(tempId);
+              const reason = e instanceof Error ? e.message : String(e);
+              await stream.writeSSE({
+                event: "error",
+                data: JSON.stringify({
+                  error: `Init script execution failed: ${reason}`,
+                  step: "running_init_script",
+                }),
+              });
+              return;
+            }
+          }
+        }
+
+        // --- Step: Launch CLI ---
+        await emitProgress(stream, "launching_cli", "Launching Claude Code...", "in_progress");
+
+        const session = launcher.launch({
+          model: body.model,
+          permissionMode: body.permissionMode,
+          cwd,
+          claudeBinary: body.claudeBinary,
+          codexBinary: body.codexBinary,
+          codexInternetAccess: backend === "codex" && body.codexInternetAccess === true,
+          codexSandbox: backend === "codex" && body.codexInternetAccess === true
+            ? "danger-full-access"
+            : "workspace-write",
+          allowedTools: body.allowedTools,
+          env: envVars,
+          backendType: backend,
+          containerId,
+          containerName,
+          containerImage,
+          containerCwd: containerInfo?.containerCwd,
+        });
+
+        // Re-track container and mark session as containerized
+        if (containerInfo) {
+          containerManager.retrack(containerInfo.containerId, session.sessionId);
+          wsBridge.markContainerized(session.sessionId, cwd);
+        }
+
+        // Track worktree mapping
+        if (worktreeInfo) {
+          worktreeTracker.addMapping({
+            sessionId: session.sessionId,
+            repoRoot: worktreeInfo.repoRoot,
+            branch: worktreeInfo.branch,
+            actualBranch: worktreeInfo.actualBranch,
+            worktreePath: worktreeInfo.worktreePath,
+            createdAt: Date.now(),
+          });
+        }
+
+        await emitProgress(stream, "launching_cli", "Session started", "done");
+
+        // --- Done ---
+        await stream.writeSSE({
+          event: "done",
+          data: JSON.stringify({
+            sessionId: session.sessionId,
+            state: session.state,
+            cwd: session.cwd,
+          }),
+        });
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("[routes] Failed to create session (stream):", msg);
+        await stream.writeSSE({
+          event: "error",
+          data: JSON.stringify({ error: msg }),
+        });
+      }
+    });
   });
 
   api.get("/sessions", (c) => {
@@ -272,24 +706,22 @@ export function createRoutes(
 
   api.post("/sessions/:id/relaunch", async (c) => {
     const id = c.req.param("id");
-    const ok = await launcher.relaunch(id);
-    if (!ok) return c.json({ error: "Session not found" }, 404);
+    const result = await launcher.relaunch(id);
+    if (!result.ok) {
+      const status = result.error?.includes("not found") || result.error?.includes("Session not found") ? 404 : 503;
+      return c.json({ error: result.error || "Relaunch failed" }, status);
+    }
     return c.json({ ok: true });
   });
 
   api.delete("/sessions/:id", async (c) => {
     const id = c.req.param("id");
-    if (assistantManager?.isAssistantSession(id)) {
-      return c.json({ error: "Cannot delete the assistant session. Use companion assistant stop instead." }, 403);
-    }
     await launcher.kill(id);
 
     // Clean up container if any
     containerManager.removeContainer(id);
 
-    // Clean up worktree if no other sessions use it (force: delete is destructive)
     const worktreeResult = cleanupWorktree(id, true);
-
     prPoller?.unwatch(id);
     launcher.removeSession(id);
     wsBridge.closeSession(id);
@@ -298,9 +730,6 @@ export function createRoutes(
 
   api.post("/sessions/:id/archive", async (c) => {
     const id = c.req.param("id");
-    if (assistantManager?.isAssistantSession(id)) {
-      return c.json({ error: "Cannot archive the assistant session. Use companion assistant stop instead." }, 403);
-    }
     const body = await c.req.json().catch(() => ({}));
     await launcher.kill(id);
 
@@ -310,9 +739,7 @@ export function createRoutes(
     // Stop PR polling for this session
     prPoller?.unwatch(id);
 
-    // Clean up worktree if no other sessions use it
     const worktreeResult = cleanupWorktree(id, body.force);
-
     launcher.setArchived(id, true);
     sessionStore.setArchived(id, true);
     return c.json({ ok: true, worktree: worktreeResult });
@@ -410,7 +837,7 @@ export function createRoutes(
 
   api.get("/containers/status", (c) => {
     const available = containerManager.checkDocker();
-    const version = containerManager.getDockerVersion();
+    const version = available ? containerManager.getDockerVersion() : null;
     return c.json({ available, version });
   });
 
@@ -552,6 +979,7 @@ export function createRoutes(
   api.get("/fs/diff", (c) => {
     const filePath = c.req.query("path");
     if (!filePath) return c.json({ error: "path required" }, 400);
+    const base = c.req.query("base"); // "last-commit" | "default-branch" | undefined
     const absPath = resolve(filePath);
     try {
       const repoRoot = execSync("git rev-parse --show-toplevel", {
@@ -565,21 +993,36 @@ export function createRoutes(
       }).trim() || absPath;
 
       let diff = "";
-      const diffBases = resolveBranchDiffBases(repoRoot);
-      for (const base of diffBases) {
+
+      if (base === "default-branch") {
+        // Diff against the resolved default branch (origin/HEAD, main, master)
+        const diffBases = resolveBranchDiffBases(repoRoot);
+        for (const b of diffBases) {
+          try {
+            diff = execCaptureStdout(`git diff ${b} -- "${relPath}"`, {
+              cwd: repoRoot,
+              encoding: "utf-8",
+              timeout: 5000,
+            });
+            break;
+          } catch {
+            // If a base ref is unavailable, try the next candidate.
+          }
+        }
+      } else {
+        // Default ("last-commit" or absent): diff against HEAD (uncommitted changes only)
         try {
-          diff = execCaptureStdout(`git diff ${base} -- "${relPath}"`, {
+          diff = execCaptureStdout(`git diff HEAD -- "${relPath}"`, {
             cwd: repoRoot,
             encoding: "utf-8",
             timeout: 5000,
           });
-          break;
         } catch {
-          // If a base ref is unavailable, try the next candidate.
+          // HEAD may not exist in a fresh repo with no commits; fall through to untracked handling.
         }
       }
 
-      // For untracked files, base-branch diff is empty. Show full file as added.
+      // For untracked files, the diff above is empty. Show full file as added.
       if (!diff.trim()) {
         const untracked = execSync(`git ls-files --others --exclude-standard -- "${relPath}"`, {
           cwd: repoRoot,
@@ -677,7 +1120,13 @@ export function createRoutes(
   api.post("/envs", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     try {
-      const env = envManager.createEnv(body.name, body.variables || {});
+      const env = envManager.createEnv(body.name, body.variables || {}, {
+        dockerfile: body.dockerfile,
+        baseImage: body.baseImage,
+        ports: body.ports,
+        volumes: body.volumes,
+        initScript: body.initScript,
+      });
       return c.json(env, 201);
     } catch (e: unknown) {
       return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
@@ -691,6 +1140,12 @@ export function createRoutes(
       const env = envManager.updateEnv(slug, {
         name: body.name,
         variables: body.variables,
+        dockerfile: body.dockerfile,
+        imageTag: body.imageTag,
+        baseImage: body.baseImage,
+        ports: body.ports,
+        volumes: body.volumes,
+        initScript: body.initScript,
       });
       if (!env) return c.json({ error: "Environment not found" }, 404);
       return c.json(env);
@@ -703,6 +1158,142 @@ export function createRoutes(
     const deleted = envManager.deleteEnv(c.req.param("slug"));
     if (!deleted) return c.json({ error: "Environment not found" }, 404);
     return c.json({ ok: true });
+  });
+
+  // ─── Docker Image Builds ─────────────────────────────────────────
+
+  api.post("/envs/:slug/build", async (c) => {
+    const slug = c.req.param("slug");
+    const env = envManager.getEnv(slug);
+    if (!env) return c.json({ error: "Environment not found" }, 404);
+    if (!env.dockerfile) return c.json({ error: "No Dockerfile configured for this environment" }, 400);
+    if (!containerManager.checkDocker()) return c.json({ error: "Docker is not available" }, 503);
+
+    const tag = `companion-env-${slug}:latest`;
+    envManager.updateBuildStatus(slug, "building");
+
+    try {
+      const result = await containerManager.buildImageStreaming(env.dockerfile, tag);
+      if (result.success) {
+        envManager.updateBuildStatus(slug, "success", { imageTag: tag });
+        return c.json({ success: true, imageTag: tag, log: result.log });
+      } else {
+        envManager.updateBuildStatus(slug, "error", { error: result.log.slice(-500) });
+        return c.json({ success: false, log: result.log }, 500);
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      envManager.updateBuildStatus(slug, "error", { error: msg });
+      return c.json({ success: false, error: msg }, 500);
+    }
+  });
+
+  api.get("/envs/:slug/build-status", (c) => {
+    const env = envManager.getEnv(c.req.param("slug"));
+    if (!env) return c.json({ error: "Environment not found" }, 404);
+    return c.json({
+      buildStatus: env.buildStatus || "idle",
+      buildError: env.buildError,
+      lastBuiltAt: env.lastBuiltAt,
+      imageTag: env.imageTag,
+    });
+  });
+
+  // ─── Saved Prompts (~/.companion/prompts.json) ──────────────────────
+
+  api.get("/prompts", (c) => {
+    try {
+      const cwd = c.req.query("cwd");
+      const scope = c.req.query("scope");
+      const normalizedScope =
+        scope === "global" || scope === "project" || scope === "all"
+          ? scope
+          : undefined;
+      return c.json(promptManager.listPrompts({ cwd, scope: normalizedScope }));
+    } catch (e: unknown) {
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+    }
+  });
+
+  api.get("/prompts/:id", (c) => {
+    const prompt = promptManager.getPrompt(c.req.param("id"));
+    if (!prompt) return c.json({ error: "Prompt not found" }, 404);
+    return c.json(prompt);
+  });
+
+  api.post("/prompts", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    try {
+      const prompt = promptManager.createPrompt(
+        String(body.title || body.name || ""),
+        String(body.content || ""),
+        body.scope,
+        body.cwd,
+      );
+      return c.json(prompt, 201);
+    } catch (e: unknown) {
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
+    }
+  });
+
+  api.put("/prompts/:id", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    try {
+      const prompt = promptManager.updatePrompt(c.req.param("id"), {
+        name: body.title ?? body.name,
+        content: body.content,
+      });
+      if (!prompt) return c.json({ error: "Prompt not found" }, 404);
+      return c.json(prompt);
+    } catch (e: unknown) {
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
+    }
+  });
+
+  api.delete("/prompts/:id", (c) => {
+    const deleted = promptManager.deletePrompt(c.req.param("id"));
+    if (!deleted) return c.json({ error: "Prompt not found" }, 404);
+    return c.json({ ok: true });
+  });
+
+  api.post("/docker/build-base", async (c) => {
+    if (!containerManager.checkDocker()) return c.json({ error: "Docker is not available" }, 503);
+    // Build the-companion base image from the repo's Dockerfile
+    const dockerfilePath = join(WEB_DIR, "docker", "Dockerfile.the-companion");
+    if (!existsSync(dockerfilePath)) {
+      return c.json({ error: "Base Dockerfile not found at " + dockerfilePath }, 404);
+    }
+    try {
+      const log = containerManager.buildImage(dockerfilePath, "the-companion:latest");
+      return c.json({ success: true, log });
+    } catch (e: unknown) {
+      return c.json({ success: false, error: e instanceof Error ? e.message : String(e) }, 500);
+    }
+  });
+
+  api.get("/docker/base-image", (c) => {
+    const exists = containerManager.imageExists("the-companion:latest");
+    return c.json({ exists, image: "the-companion:latest" });
+  });
+
+  // ─── Image Pull Manager ──────────────────────────────────────────────
+
+  /** Get pull state for a Docker image */
+  api.get("/images/:tag/status", (c) => {
+    const tag = decodeURIComponent(c.req.param("tag"));
+    if (!tag) return c.json({ error: "Image tag is required" }, 400);
+    return c.json(imagePullManager.getState(tag));
+  });
+
+  /** Trigger a background pull for an image (idempotent) */
+  api.post("/images/:tag/pull", (c) => {
+    const tag = decodeURIComponent(c.req.param("tag"));
+    if (!tag) return c.json({ error: "Image tag is required" }, 400);
+    if (!containerManager.checkDocker()) {
+      return c.json({ error: "Docker is not available" }, 503);
+    }
+    imagePullManager.pull(tag);
+    return c.json({ ok: true, state: imagePullManager.getState(tag) });
   });
 
   // ─── Settings (~/.companion/settings.json) ────────────────────────
@@ -764,46 +1355,33 @@ export function createRoutes(
     }
   });
 
-  api.get("/git/worktrees", (c) => {
-    const repoRoot = c.req.query("repoRoot");
-    if (!repoRoot) return c.json({ error: "repoRoot required" }, 400);
-    try {
-      return c.json(gitUtils.listWorktrees(repoRoot));
-    } catch (e: unknown) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
-    }
-  });
-
-  api.post("/git/worktree", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    const { repoRoot, branch, baseBranch, createBranch } = body;
-    if (!repoRoot || !branch)
-      return c.json({ error: "repoRoot and branch required" }, 400);
-    try {
-      const result = gitUtils.ensureWorktree(repoRoot, branch, {
-        baseBranch,
-        createBranch,
-      });
-      return c.json(result);
-    } catch (e: unknown) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
-    }
-  });
-
-  api.delete("/git/worktree", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    const { repoRoot, worktreePath, force } = body;
-    if (!repoRoot || !worktreePath)
-      return c.json({ error: "repoRoot and worktreePath required" }, 400);
-    const result = gitUtils.removeWorktree(repoRoot, worktreePath, { force });
-    return c.json(result);
-  });
-
   api.post("/git/fetch", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const { repoRoot } = body;
     if (!repoRoot) return c.json({ error: "repoRoot required" }, 400);
     return c.json(gitUtils.gitFetch(repoRoot));
+  });
+
+  api.get("/git/worktrees", (c) => {
+    const repoRoot = c.req.query("repoRoot");
+    if (!repoRoot) return c.json({ error: "repoRoot required" }, 400);
+    return c.json(gitUtils.listWorktrees(repoRoot));
+  });
+
+  api.post("/git/worktree", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const { repoRoot, branch, baseBranch, createBranch } = body;
+    if (!repoRoot || !branch) return c.json({ error: "repoRoot and branch required" }, 400);
+    const result = gitUtils.ensureWorktree(repoRoot, branch, { baseBranch, createBranch });
+    return c.json(result);
+  });
+
+  api.delete("/git/worktree", async (c) => {
+    const body = await c.req.json().catch(() => ({}));
+    const { repoRoot, worktreePath, force } = body;
+    if (!repoRoot || !worktreePath) return c.json({ error: "repoRoot and worktreePath required" }, 400);
+    const result = gitUtils.removeWorktree(repoRoot, worktreePath, { force });
+    return c.json(result);
   });
 
   api.post("/git/pull", async (c) => {
@@ -888,7 +1466,7 @@ export function createRoutes(
     return c.json(limits);
   });
 
-  // ─── Update status (informational — updates handled by scripts/update.sh) ──
+  // ─── Update checking ─────────────────────────────────────────────────
 
   api.get("/update-check", async (c) => {
     const initialState = getUpdateState();
@@ -898,76 +1476,144 @@ export function createRoutes(
     if (needsRefresh) {
       await checkForUpdate();
     }
-    return c.json(getUpdateState());
+
+    const state = getUpdateState();
+    return c.json({
+      currentVersion: state.currentVersion,
+      latestVersion: state.latestVersion,
+      updateAvailable: isUpdateAvailable(),
+      isServiceMode: state.isServiceMode,
+      updateInProgress: state.updateInProgress,
+      lastChecked: state.lastChecked,
+    });
   });
 
   api.post("/update-check", async (c) => {
     await checkForUpdate();
-    return c.json(getUpdateState());
+    const state = getUpdateState();
+    return c.json({
+      currentVersion: state.currentVersion,
+      latestVersion: state.latestVersion,
+      updateAvailable: isUpdateAvailable(),
+      isServiceMode: state.isServiceMode,
+      updateInProgress: state.updateInProgress,
+      lastChecked: state.lastChecked,
+    });
   });
 
-  // ─── Helper ─────────────────────────────────────────────────────────
-
-  function cleanupWorktree(
-    sessionId: string,
-    force?: boolean,
-  ): { cleaned?: boolean; dirty?: boolean; path?: string } | undefined {
-    const mapping = worktreeTracker.getBySession(sessionId);
-    if (!mapping) return undefined;
-
-    // Check if any other sessions still use this worktree
-    if (worktreeTracker.isWorktreeInUse(mapping.worktreePath, sessionId)) {
-      worktreeTracker.removeBySession(sessionId);
-      return { cleaned: false, path: mapping.worktreePath };
-    }
-
-    // Auto-remove if clean, or force-remove if requested
-    const dirty = gitUtils.isWorktreeDirty(mapping.worktreePath);
-    if (dirty && !force) {
-      console.log(
-        `[routes] Worktree ${mapping.worktreePath} is dirty, not auto-removing`,
-      );
-      // Keep the mapping so the worktree remains trackable
-      return { cleaned: false, dirty: true, path: mapping.worktreePath };
-    }
-
-    // Delete the companion-managed branch if it differs from the conceptual branch
-    const branchToDelete =
-      mapping.actualBranch && mapping.actualBranch !== mapping.branch
-        ? mapping.actualBranch
-        : undefined;
-    const result = gitUtils.removeWorktree(
-      mapping.repoRoot,
-      mapping.worktreePath,
-      { force: dirty, branchToDelete },
-    );
-    if (result.removed) {
-      // Only remove the mapping after successful cleanup
-      worktreeTracker.removeBySession(sessionId);
-      console.log(
-        `[routes] ${dirty ? "Force-removed dirty" : "Auto-removed clean"} worktree ${mapping.worktreePath}`,
+  api.post("/update", async (c) => {
+    const state = getUpdateState();
+    if (!state.isServiceMode) {
+      return c.json(
+        { error: "Update & restart is only available in service mode" },
+        400,
       );
     }
-    return { cleaned: result.removed, path: mapping.worktreePath };
-  }
+    if (!isUpdateAvailable()) {
+      return c.json({ error: "No update available" }, 400);
+    }
+    if (state.updateInProgress) {
+      return c.json({ error: "Update already in progress" }, 409);
+    }
+
+    setUpdateInProgress(true);
+
+    // Respond immediately, then perform update async
+    setTimeout(async () => {
+      try {
+        console.log(
+          `[update] Updating the-companion to ${state.latestVersion}...`,
+        );
+        const proc = Bun.spawn(
+          ["bun", "install", "-g", `the-companion@${state.latestVersion}`],
+          { stdout: "pipe", stderr: "pipe" },
+        );
+        const exitCode = await proc.exited;
+        if (exitCode !== 0) {
+          const stderr = await new Response(proc.stderr).text();
+          console.error(
+            `[update] bun install failed (code ${exitCode}):`,
+            stderr,
+          );
+          setUpdateInProgress(false);
+          return;
+        }
+
+        // Refresh the service definition so the new unit/plist template
+        // (e.g. Restart=always) takes effect for existing installations.
+        try {
+          refreshServiceDefinition();
+          console.log("[update] Service definition refreshed.");
+        } catch (err) {
+          console.warn("[update] Failed to refresh service definition:", err);
+        }
+
+        console.log(
+          "[update] Update successful, restarting service...",
+        );
+
+        // Explicitly restart via the service manager in a detached process
+        // so the restart survives our own exit.
+        const isLinux = process.platform === "linux";
+        const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+        const restartCmd = isLinux
+          ? ["systemctl", "--user", "restart", "the-companion.service"]
+          : uid !== undefined
+            ? ["launchctl", "kickstart", "-k", `gui/${uid}/sh.thecompanion.app`]
+            : ["launchctl", "kickstart", "-k", "sh.thecompanion.app"];
+
+        Bun.spawn(restartCmd, {
+          stdout: "ignore",
+          stderr: "ignore",
+          stdin: "ignore",
+          env: isLinux
+            ? {
+                ...process.env,
+                XDG_RUNTIME_DIR:
+                  process.env.XDG_RUNTIME_DIR ||
+                  `/run/user/${uid ?? 1000}`,
+              }
+            : undefined,
+        });
+
+        // Give the spawn a moment to dispatch, then exit cleanly.
+        // The service manager restart will kill us if we haven't exited yet.
+        setTimeout(() => process.exit(0), 500);
+      } catch (err) {
+        console.error("[update] Update failed:", err);
+        setUpdateInProgress(false);
+      }
+    }, 100);
+
+    return c.json({
+      ok: true,
+      message: "Update started. Server will restart shortly.",
+    });
+  });
 
   // ─── Terminal ──────────────────────────────────────────────────────
 
   api.get("/terminal", (c) => {
-    const info = terminalManager.getInfo();
+    const terminalId = c.req.query("terminalId");
+    const info = terminalManager.getInfo(terminalId || undefined);
     if (!info) return c.json({ active: false });
     return c.json({ active: true, terminalId: info.id, cwd: info.cwd });
   });
 
   api.post("/terminal/spawn", async (c) => {
-    const body = await c.req.json<{ cwd: string; cols?: number; rows?: number }>();
+    const body = await c.req.json<{ cwd: string; cols?: number; rows?: number; containerId?: string }>();
     if (!body.cwd) return c.json({ error: "cwd is required" }, 400);
-    const terminalId = terminalManager.spawn(body.cwd, body.cols, body.rows);
+    const terminalId = terminalManager.spawn(body.cwd, body.cols, body.rows, {
+      containerId: body.containerId,
+    });
     return c.json({ terminalId });
   });
 
-  api.post("/terminal/kill", (c) => {
-    terminalManager.kill();
+  api.post("/terminal/kill", async (c) => {
+    const body = await c.req.json<{ terminalId?: string }>().catch(() => undefined);
+    const terminalId = body?.terminalId?.trim();
+    if (!terminalId) return c.json({ error: "terminalId is required" }, 400);
+    terminalManager.kill(terminalId);
     return c.json({ ok: true });
   });
 
@@ -984,42 +1630,6 @@ export function createRoutes(
     }
     wsBridge.injectUserMessage(id, body.content);
     return c.json({ ok: true, sessionId: id });
-  });
-
-  // ─── Companion Assistant ──────────────────────────────────────────
-
-  api.get("/assistant/status", (c) => {
-    if (!assistantManager) return c.json({ error: "Assistant not available" }, 501);
-    return c.json(assistantManager.getStatus());
-  });
-
-  api.post("/assistant/launch", async (c) => {
-    if (!assistantManager) return c.json({ error: "Assistant not available" }, 501);
-    const session = await assistantManager.start();
-    if (!session) return c.json({ error: "Failed to launch assistant" }, 500);
-    return c.json({ ok: true, sessionId: session.sessionId });
-  });
-
-  api.post("/assistant/stop", async (c) => {
-    if (!assistantManager) return c.json({ error: "Assistant not available" }, 501);
-    const stopped = await assistantManager.stop();
-    return c.json({ ok: stopped });
-  });
-
-  api.get("/assistant/config", (c) => {
-    if (!assistantManager) return c.json({ error: "Assistant not available" }, 501);
-    return c.json(assistantManager.getConfig());
-  });
-
-  api.put("/assistant/config", async (c) => {
-    if (!assistantManager) return c.json({ error: "Assistant not available" }, 501);
-    const body = await c.req.json().catch(() => ({}));
-    const config = assistantManager.updateConfig({
-      model: typeof body.model === "string" ? body.model : undefined,
-      permissionMode: typeof body.permissionMode === "string" ? body.permissionMode : undefined,
-      enabled: typeof body.enabled === "boolean" ? body.enabled : undefined,
-    });
-    return c.json(config);
   });
 
   // ─── Skills ─────────────────────────────────────────────────────────
@@ -1218,6 +1828,42 @@ export function createRoutes(
     const id = c.req.param("id");
     return c.json(cronScheduler?.getExecutions(id) ?? []);
   });
+
+  // ─── Worktree cleanup helper ────────────────────────────────────
+
+  function cleanupWorktree(
+    sessionId: string,
+    force?: boolean,
+  ): { cleaned?: boolean; dirty?: boolean; path?: string } | undefined {
+    const mapping = worktreeTracker.getBySession(sessionId);
+    if (!mapping) return undefined;
+
+    // Check if other sessions still use this worktree
+    if (worktreeTracker.isWorktreeInUse(mapping.worktreePath, sessionId)) {
+      worktreeTracker.removeBySession(sessionId);
+      return { cleaned: false, path: mapping.worktreePath };
+    }
+
+    // Auto-remove if clean, or force-remove if requested
+    const dirty = gitUtils.isWorktreeDirty(mapping.worktreePath);
+    if (dirty && !force) {
+      return { cleaned: false, dirty: true, path: mapping.worktreePath };
+    }
+
+    // Delete companion-managed branch if it differs from the user-selected branch
+    const branchToDelete =
+      mapping.actualBranch && mapping.actualBranch !== mapping.branch
+        ? mapping.actualBranch
+        : undefined;
+    const result = gitUtils.removeWorktree(mapping.repoRoot, mapping.worktreePath, {
+      force: dirty,
+      branchToDelete,
+    });
+    if (result.removed) {
+      worktreeTracker.removeBySession(sessionId);
+    }
+    return { cleaned: result.removed, path: mapping.worktreePath };
+  }
 
   return api;
 }

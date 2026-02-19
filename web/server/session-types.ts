@@ -237,6 +237,7 @@ export interface SessionState {
   is_compacting: boolean;
   git_branch: string;
   is_worktree: boolean;
+  is_containerized: boolean;
   repo_root: string;
   git_ahead: number;
   git_behind: number;
@@ -304,4 +305,26 @@ export interface PermissionRequest {
   tool_use_id: string;
   agent_id?: string;
   timestamp: number;
+}
+
+// ─── Session Creation Progress (SSE streaming) ──────────────────────────────
+
+export type CreationStepId =
+  | "resolving_env"
+  | "fetching_git"
+  | "checkout_branch"
+  | "pulling_git"
+  | "creating_worktree"
+  | "pulling_image"
+  | "building_image"
+  | "creating_container"
+  | "copying_workspace"
+  | "running_init_script"
+  | "launching_cli";
+
+export interface CreationProgressEvent {
+  step: CreationStepId;
+  label: string;
+  status: "in_progress" | "done" | "error";
+  detail?: string;
 }

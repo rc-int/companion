@@ -20,7 +20,6 @@ const mockApi = {
   deleteSession: vi.fn().mockResolvedValue({}),
   archiveSession: vi.fn().mockResolvedValue({}),
   unarchiveSession: vi.fn().mockResolvedValue({}),
-  getAssistantStatus: vi.fn().mockResolvedValue({ running: false, sessionId: null }),
 };
 
 vi.mock("../api.js", () => ({
@@ -29,7 +28,6 @@ vi.mock("../api.js", () => ({
     deleteSession: (...args: unknown[]) => mockApi.deleteSession(...args),
     archiveSession: (...args: unknown[]) => mockApi.archiveSession(...args),
     unarchiveSession: (...args: unknown[]) => mockApi.unarchiveSession(...args),
-    getAssistantStatus: (...args: unknown[]) => mockApi.getAssistantStatus(...args),
   },
 }));
 
@@ -42,7 +40,6 @@ interface MockStoreState {
   sessions: Map<string, SessionState>;
   sdkSessions: SdkSessionInfo[];
   currentSessionId: string | null;
-  assistantSessionId: string | null;
   cliConnected: Map<string, boolean>;
   sessionStatus: Map<string, "idle" | "running" | "compacting" | null>;
   sessionNames: Map<string, string>;
@@ -50,7 +47,6 @@ interface MockStoreState {
   pendingPermissions: Map<string, Map<string, unknown>>;
   collapsedProjects: Set<string>;
   setCurrentSession: ReturnType<typeof vi.fn>;
-  setAssistantSessionId: ReturnType<typeof vi.fn>;
   toggleProjectCollapse: ReturnType<typeof vi.fn>;
   removeSession: ReturnType<typeof vi.fn>;
   newSession: ReturnType<typeof vi.fn>;
@@ -80,6 +76,7 @@ function makeSession(id: string, overrides: Partial<SessionState> = {}): Session
     is_compacting: false,
     git_branch: "",
     is_worktree: false,
+    is_containerized: false,
     repo_root: "",
     git_ahead: 0,
     git_behind: 0,
@@ -107,7 +104,6 @@ function createMockState(overrides: Partial<MockStoreState> = {}): MockStoreStat
     sessions: new Map(),
     sdkSessions: [],
     currentSessionId: null,
-    assistantSessionId: null,
     cliConnected: new Map(),
     sessionStatus: new Map(),
     sessionNames: new Map(),
@@ -115,7 +111,6 @@ function createMockState(overrides: Partial<MockStoreState> = {}): MockStoreStat
     pendingPermissions: new Map(),
     collapsedProjects: new Set(),
     setCurrentSession: vi.fn(),
-    setAssistantSessionId: vi.fn(),
     toggleProjectCollapse: vi.fn(),
     removeSession: vi.fn(),
     newSession: vi.fn(),
@@ -225,16 +220,16 @@ describe("Sidebar", () => {
     expect(screen.getByText("feature/awesome")).toBeInTheDocument();
   });
 
-  it("session items show worktree badge when is_worktree is true", () => {
-    const session = makeSession("s1", { git_branch: "feature/wt", is_worktree: true });
-    const sdk = makeSdkSession("s1", { isWorktree: true });
+  it("session items show container badge when is_containerized is true", () => {
+    const session = makeSession("s1", { git_branch: "feature/docker", is_containerized: true });
+    const sdk = makeSdkSession("s1", { containerId: "abc123" });
     mockState = createMockState({
       sessions: new Map([["s1", session]]),
       sdkSessions: [sdk],
     });
 
     render(<Sidebar />);
-    expect(screen.getByText("wt")).toBeInTheDocument();
+    expect(screen.getByText("Docker")).toBeInTheDocument();
   });
 
   it("session items show ahead/behind counts", () => {
@@ -288,7 +283,9 @@ describe("Sidebar", () => {
     expect(sessionButton).toHaveClass("bg-cc-active");
   });
 
-  it("clicking a session calls setCurrentSession and connectSession", () => {
+  it("clicking a session navigates to the session hash", () => {
+    // Sidebar now delegates to URL-based routing: it sets the hash to #/session/{id}
+    // and App.tsx's hash effect handles setCurrentSession + connectSession
     const session = makeSession("s1");
     const sdk = makeSdkSession("s1");
     mockState = createMockState({
@@ -301,8 +298,7 @@ describe("Sidebar", () => {
     const sessionButton = screen.getByText("claude-sonnet-4-5-20250929").closest("button")!;
     fireEvent.click(sessionButton);
 
-    expect(mockState.setCurrentSession).toHaveBeenCalledWith("s1");
-    expect(mockConnectSession).toHaveBeenCalledWith("s1");
+    expect(window.location.hash).toBe("#/session/s1");
   });
 
   it("New Session button calls newSession", () => {
@@ -429,6 +425,12 @@ describe("Sidebar", () => {
     render(<Sidebar />);
     fireEvent.click(screen.getByText("Settings").closest("button")!);
     expect(window.location.hash).toBe("#/settings");
+  });
+
+  it("navigates to prompts page when Prompts is clicked", () => {
+    render(<Sidebar />);
+    fireEvent.click(screen.getByText("Prompts").closest("button")!);
+    expect(window.location.hash).toBe("#/prompts");
   });
 
   it("navigates to terminal page when Terminal is clicked", () => {
