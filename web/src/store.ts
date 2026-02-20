@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { SessionState, PermissionRequest, ChatMessage, SdkSessionInfo, TaskItem, McpServerDetail } from "./types.js";
-import type { UpdateInfo, PRStatusResponse, CreationProgressEvent } from "./api.js";
+import type { PRStatusResponse, CreationProgressEvent } from "./api.js";
 
 export interface QuickTerminalTab {
   id: string;
@@ -65,9 +65,6 @@ interface AppState {
   // Sidebar project grouping
   collapsedProjects: Set<string>;
 
-  // Update info
-  updateInfo: UpdateInfo | null;
-  updateDismissedVersion: string | null;
 
   // Session creation progress (SSE streaming)
   creationProgress: CreationProgressEvent[] | null;
@@ -154,9 +151,6 @@ interface AppState {
   setCliConnected: (sessionId: string, connected: boolean) => void;
   setSessionStatus: (sessionId: string, status: "idle" | "running" | "compacting" | null) => void;
 
-  // Update actions
-  setUpdateInfo: (info: UpdateInfo | null) => void;
-  dismissUpdate: (version: string) => void;
 
   // Diff panel actions
   setActiveTab: (tab: "chat" | "diff" | "terminal") => void;
@@ -235,11 +229,6 @@ function getInitialNotificationDesktop(): boolean {
   return false;
 }
 
-function getInitialDismissedVersion(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem("cc-update-dismissed") || null;
-}
-
 function getInitialCollapsedProjects(): Set<string> {
   if (typeof window === "undefined") return new Set();
   try {
@@ -288,8 +277,6 @@ export const useStore = create<AppState>((set) => ({
   creationError: null,
   sessionCreating: false,
   sessionCreatingBackend: null,
-  updateInfo: null,
-  updateDismissedVersion: getInitialDismissedVersion(),
   darkMode: getInitialDarkMode(),
   notificationSound: getInitialNotificationSound(),
   notificationDesktop: getInitialNotificationDesktop(),
@@ -678,12 +665,6 @@ export const useStore = create<AppState>((set) => ({
       sessionStatus.set(sessionId, status);
       return { sessionStatus };
     }),
-
-  setUpdateInfo: (info) => set({ updateInfo: info }),
-  dismissUpdate: (version) => {
-    localStorage.setItem("cc-update-dismissed", version);
-    set({ updateDismissedVersion: version });
-  },
 
   setActiveTab: (tab) => set({ activeTab: tab }),
   markChatTabReentry: (sessionId) =>

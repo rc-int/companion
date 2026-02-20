@@ -11,7 +11,6 @@ import { HomePage } from "./components/HomePage.js";
 import { TaskPanel } from "./components/TaskPanel.js";
 import { DiffPanel } from "./components/DiffPanel.js";
 import { Playground } from "./components/Playground.js";
-import { UpdateBanner } from "./components/UpdateBanner.js";
 import { SettingsPage } from "./components/SettingsPage.js";
 import { PromptsPage } from "./components/PromptsPage.js";
 import { EnvManager } from "./components/EnvManager.js";
@@ -84,17 +83,6 @@ export default function App() {
     // For other pages (settings, terminal, etc.), preserve currentSessionId
   }, [route]);
 
-  // Poll for updates
-  useEffect(() => {
-    const check = () => {
-      api.checkForUpdate().then((info) => {
-        useStore.getState().setUpdateInfo(info);
-      }).catch(() => {});
-    };
-    check();
-    const interval = setInterval(check, 5 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, []);
 
   if (route.page === "playground") {
     return <Playground />;
@@ -125,7 +113,6 @@ export default function App() {
       {/* Main area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <TopBar />
-        <UpdateBanner />
         <div className="flex-1 overflow-hidden relative">
           {isSettingsPage && (
             <div className="absolute inset-0">

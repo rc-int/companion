@@ -27,7 +27,7 @@ import { PRPoller } from "./pr-poller.js";
 import { RecorderManager } from "./recorder.js";
 import { CronScheduler } from "./cron-scheduler.js";
 
-import { startPeriodicCheck, setServiceMode } from "./update-checker.js";
+import { startPeriodicCheck } from "./update-checker.js";
 import { imagePullManager } from "./image-pull-manager.js";
 import { isRunningAsService } from "./service.js";
 import type { SocketData } from "./ws-bridge.js";
@@ -221,8 +221,7 @@ imagePullManager.initFromEnvironments();
 // ── Update checker ──────────────────────────────────────────────────────────
 startPeriodicCheck();
 if (isRunningAsService()) {
-  setServiceMode(true);
-  console.log("[server] Running as background service (auto-update available)");
+  console.log("[server] Running as background service");
 }
 
 // ── Graceful shutdown — persist container state ──────────────────────────────

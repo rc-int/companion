@@ -87,6 +87,7 @@ vi.mock("./usage-limits.js", () => ({
 vi.mock("./update-checker.js", () => ({
   getUpdateState: vi.fn(() => ({ ...mockUpdateCheckerState })),
   checkForUpdate: mockCheckForUpdate,
+  isUpdateAvailable: vi.fn(() => false),
 }));
 
 // Mock image-pull-manager — default: images are always ready
@@ -191,9 +192,7 @@ beforeEach(() => {
   mockUpdateCheckerState.currentVersion = "0.22.1";
   mockUpdateCheckerState.latestVersion = null;
   mockUpdateCheckerState.lastChecked = 0;
-  mockUpdateCheckerState.isServiceMode = false;
   mockUpdateCheckerState.checking = false;
-  mockUpdateCheckerState.updateInProgress = false;
   launcher = createMockLauncher();
   bridge = createMockBridge();
   sessionStore = createMockStore();
@@ -1486,6 +1485,27 @@ describe("GET /api/update-check", () => {
 
     expect(res.status).toBe(200);
     expect(mockCheckForUpdate).not.toHaveBeenCalled();
+  });
+
+  // Regression: upstream merge re-introduced removed fields (isServiceMode,
+  // updateInProgress) that don't exist in the simplified update checker.
+  // This test guards against that happening again.
+  it("response contains only informational fields (no interactive update fields)", async () => {
+    mockUpdateCheckerState.lastChecked = Date.now();
+
+    const res = await app.request("/api/update-check", { method: "GET" });
+    const json = await res.json();
+
+    // These fields should be present (informational model)
+    expect(json).toHaveProperty("currentVersion");
+    expect(json).toHaveProperty("latestVersion");
+    expect(json).toHaveProperty("updateAvailable");
+    expect(json).toHaveProperty("lastChecked");
+
+    // These fields were removed in the simplification to informational-only —
+    // they belong to the interactive update model and must not reappear.
+    expect(json).not.toHaveProperty("isServiceMode");
+    expect(json).not.toHaveProperty("updateInProgress");
   });
 });
 
