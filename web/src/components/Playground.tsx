@@ -10,11 +10,15 @@ import { ChatView } from "./ChatView.js";
 import { api } from "../api.js";
 import type { PermissionRequest, ChatMessage, ContentBlock, SessionState, McpServerDetail } from "../types.js";
 import type { TaskItem } from "../types.js";
-import type { GitHubPRInfo } from "../api.js";
+import type { UpdateInfo, GitHubPRInfo, LinearIssue, LinearComment } from "../api.js";
 import { GitHubPRDisplay, CodexRateLimitsSection, CodexTokenDetailsSection } from "./TaskPanel.js";
+import { LinearLogo } from "./LinearLogo.js";
 import { SessionCreationProgress } from "./SessionCreationProgress.js";
 import { SessionLaunchOverlay } from "./SessionLaunchOverlay.js";
+import { PlaygroundUpdateOverlay } from "./UpdateOverlay.js";
+import { SessionItem } from "./SessionItem.js";
 import type { CreationProgressEvent } from "../types.js";
+import type { SessionItem as SessionItemType } from "../utils/project-grouping.js";
 
 // ─── Mock Data ──────────────────────────────────────────────────────────────
 
@@ -253,6 +257,14 @@ const MSG_ASSISTANT_THINKING: ChatMessage = {
   timestamp: Date.now() - 40000,
 };
 
+const MSG_ASSISTANT_STREAMING: ChatMessage = {
+  id: "msg-streaming",
+  role: "assistant",
+  content: "Scanning auth files and drafting migration steps...",
+  isStreaming: true,
+  timestamp: Date.now() - 35000,
+};
+
 const MSG_SYSTEM: ChatMessage = {
   id: "msg-6",
   role: "system",
@@ -430,6 +442,43 @@ const MOCK_MCP_SERVERS: McpServerDetail[] = [
   },
 ];
 
+// Linear issue mock data
+const MOCK_LINEAR_ISSUE_ACTIVE: LinearIssue = {
+  id: "issue-1",
+  identifier: "THE-147",
+  title: "Associer un ticket Linear a une session dans le panneau lateral droit",
+  description: "Pouvoir associer un ticket Linear a une session.",
+  url: "https://linear.app/thevibecompany/issue/THE-147",
+  branchName: "the-147-associer-un-ticket-linear",
+  priorityLabel: "High",
+  stateName: "In Progress",
+  stateType: "started",
+  teamName: "Thevibecompany",
+  teamKey: "THE",
+  teamId: "team-the",
+};
+
+const MOCK_LINEAR_ISSUE_DONE: LinearIssue = {
+  id: "issue-2",
+  identifier: "ENG-256",
+  title: "Fix authentication flow for SSO users",
+  description: "SSO users get a blank page after login redirect.",
+  url: "https://linear.app/team/issue/ENG-256",
+  branchName: "eng-256-fix-auth-flow-sso",
+  priorityLabel: "Urgent",
+  stateName: "Done",
+  stateType: "completed",
+  teamName: "Engineering",
+  teamKey: "ENG",
+  teamId: "team-eng",
+};
+
+const MOCK_LINEAR_COMMENTS: LinearComment[] = [
+  { id: "c1", body: "Started working on the sidebar integration", createdAt: new Date(Date.now() - 3600_000).toISOString(), userName: "Alice" },
+  { id: "c2", body: "Added the search component, LGTM", createdAt: new Date(Date.now() - 1800_000).toISOString(), userName: "Bob" },
+  { id: "c3", body: "Testing the polling flow now", createdAt: new Date(Date.now() - 300_000).toISOString(), userName: "Alice" },
+];
+
 // ─── Playground Component ───────────────────────────────────────────────────
 
 export function Playground() {
@@ -491,6 +540,14 @@ export function Playground() {
       MSG_ASSISTANT,
       MSG_ASSISTANT_TOOLS,
       MSG_TOOL_ERROR,
+      {
+        id: "msg-streaming",
+        role: "assistant",
+        content: "I'm updating tests and then I'll run the full suite.",
+        contentBlocks: [{ type: "text", text: "I'm updating tests and then I'll run the full suite." }],
+        isStreaming: true,
+        timestamp: Date.now(),
+      },
     ]);
     store.setStreaming(sessionId, "I'm updating tests and then I'll run the full suite.");
     store.setStreamingStats(sessionId, { startedAt: Date.now() - 12000, outputTokens: 1200 });
@@ -622,6 +679,9 @@ export function Playground() {
             </Card>
             <Card label="Assistant message (with tool calls)">
               <MessageBubble message={MSG_ASSISTANT_TOOLS} />
+            </Card>
+            <Card label="Assistant message (streaming)">
+              <MessageBubble message={MSG_ASSISTANT_STREAMING} />
             </Card>
             <Card label="Assistant message (thinking block)">
               <MessageBubble message={MSG_ASSISTANT_THINKING} />
@@ -769,6 +829,102 @@ export function Playground() {
           </div>
         </Section>
 
+        {/* ─── Linear Issue (TaskPanel) ────────────────── */}
+        <Section title="Linear Issue (TaskPanel)" description="Linear issue linked to a session — displayed in TaskPanel with status, comments, and actions">
+          <div className="space-y-4">
+            <Card label="Active issue — In Progress with comments">
+              <div className="w-[280px] border border-cc-border rounded-xl overflow-hidden bg-cc-card">
+                <div className="px-4 py-3 space-y-2">
+                  <div className="flex items-center gap-1.5">
+                    <LinearLogo className="w-3.5 h-3.5 text-cc-muted shrink-0" />
+                    <span className="text-[12px] font-semibold text-cc-fg font-mono-code">{MOCK_LINEAR_ISSUE_ACTIVE.identifier}</span>
+                    <span className="text-[9px] font-medium px-1.5 rounded-full leading-[16px] text-blue-400 bg-blue-400/10">
+                      {MOCK_LINEAR_ISSUE_ACTIVE.stateName}
+                    </span>
+                    <button className="ml-auto flex items-center justify-center w-5 h-5 rounded text-cc-muted hover:text-cc-fg hover:bg-cc-hover transition-colors cursor-pointer" title="Unlink">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3 h-3"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-cc-muted truncate">{MOCK_LINEAR_ISSUE_ACTIVE.title}</p>
+                  <div className="flex items-center gap-2 text-[10px] text-cc-muted">
+                    <span>{MOCK_LINEAR_ISSUE_ACTIVE.priorityLabel}</span>
+                    <span>&middot;</span>
+                    <span>{MOCK_LINEAR_ISSUE_ACTIVE.teamName}</span>
+                    <span>&middot;</span>
+                    <span>@ Alice</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full" style={{ backgroundColor: "#bb87fc20", color: "#bb87fc" }}>feature</span>
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full" style={{ backgroundColor: "#f2994a20", color: "#f2994a" }}>frontend</span>
+                  </div>
+                </div>
+                {/* Comments */}
+                <div className="px-4 py-2 border-t border-cc-border space-y-1.5 max-h-36 overflow-y-auto">
+                  <span className="text-[10px] text-cc-muted uppercase tracking-wider">Comments</span>
+                  {MOCK_LINEAR_COMMENTS.map((c) => (
+                    <div key={c.id} className="text-[11px]">
+                      <div className="flex items-center gap-1">
+                        <span className="font-medium text-cc-fg">{c.userName}</span>
+                        <span className="text-[9px] text-cc-muted">just now</span>
+                      </div>
+                      <p className="text-cc-muted line-clamp-2">{c.body}</p>
+                    </div>
+                  ))}
+                </div>
+                {/* Comment input */}
+                <div className="px-4 py-2 border-t border-cc-border flex items-center gap-1.5">
+                  <input type="text" placeholder="Add a comment..." className="flex-1 text-[11px] bg-transparent border border-cc-border rounded-md px-2 py-1.5 text-cc-fg placeholder:text-cc-muted focus:outline-none focus:border-cc-primary/50" />
+                  <button className="flex items-center justify-center w-6 h-6 rounded text-cc-primary cursor-pointer">
+                    <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5"><path d="M1.724 1.053a.5.5 0 0 0-.714.545l1.403 4.85a.5.5 0 0 0 .397.354l5.19.736-5.19.737a.5.5 0 0 0-.397.353L1.01 13.48a.5.5 0 0 0 .714.545l13-6.5a.5.5 0 0 0 0-.894l-13-6.5z" /></svg>
+                  </button>
+                </div>
+              </div>
+            </Card>
+
+            <Card label="Completed issue — Done warning banner">
+              <div className="w-[280px] border border-cc-border rounded-xl overflow-hidden bg-cc-card">
+                <div className="px-4 py-3 space-y-2">
+                  <div className="flex items-center gap-1.5">
+                    <LinearLogo className="w-3.5 h-3.5 text-cc-muted shrink-0" />
+                    <span className="text-[12px] font-semibold text-cc-fg font-mono-code">{MOCK_LINEAR_ISSUE_DONE.identifier}</span>
+                    <span className="text-[9px] font-medium px-1.5 rounded-full leading-[16px] text-cc-success bg-cc-success/10">
+                      {MOCK_LINEAR_ISSUE_DONE.stateName}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-cc-muted truncate">{MOCK_LINEAR_ISSUE_DONE.title}</p>
+                  <div className="flex items-center gap-2 text-[10px] text-cc-muted">
+                    <span>{MOCK_LINEAR_ISSUE_DONE.priorityLabel}</span>
+                    <span>&middot;</span>
+                    <span>{MOCK_LINEAR_ISSUE_DONE.teamName}</span>
+                  </div>
+                </div>
+                {/* Done warning */}
+                <div className="px-4 py-2 bg-cc-success/10 border-t border-cc-success/20 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-[11px] text-cc-success font-medium">Issue completed</p>
+                    <p className="text-[10px] text-cc-success/80">Ticket moved to done.</p>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button className="text-[10px] text-cc-muted hover:text-cc-fg px-1.5 py-0.5 rounded cursor-pointer">Dismiss</button>
+                    <button className="text-[10px] text-cc-success font-medium px-2 py-0.5 rounded bg-cc-success/20 hover:bg-cc-success/30 cursor-pointer">Close session</button>
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            <Card label="No linked issue — Link button">
+              <div className="w-[280px] border border-cc-border rounded-xl overflow-hidden bg-cc-card">
+                <div className="shrink-0 px-4 py-3 border-b border-cc-border">
+                  <button className="flex items-center gap-1.5 text-[11px] text-cc-muted hover:text-cc-fg transition-colors cursor-pointer">
+                    <LinearLogo className="w-3.5 h-3.5" />
+                    Link Linear issue
+                  </button>
+                </div>
+              </div>
+            </Card>
+          </div>
+        </Section>
+
         {/* ─── MCP Servers ──────────────────────────────── */}
         <Section title="MCP Servers" description="MCP server status display with toggle, reconnect, and tool listing">
           <div className="space-y-4">
@@ -794,6 +950,72 @@ export function Playground() {
                   {MOCK_MCP_SERVERS.map((server) => (
                     <PlaygroundMcpRow key={server.name} server={server} />
                   ))}
+                </div>
+              </div>
+            </Card>
+          </div>
+        </Section>
+
+        {/* ─── Panel Config View ──────────────────────────── */}
+        <Section title="Panel Config View" description="Inline configuration for the right sidebar — toggle sections on/off and reorder them">
+          <div className="space-y-4">
+            <Card label="Config mode with mixed enabled/disabled sections">
+              <div className="w-[320px] border border-cc-border rounded-xl overflow-hidden bg-cc-card">
+                {/* Header */}
+                <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-cc-border">
+                  <span className="text-sm font-semibold text-cc-fg tracking-tight">Panel Settings</span>
+                  <button className="flex items-center justify-center w-6 h-6 rounded-lg text-cc-muted hover:text-cc-fg hover:bg-cc-hover transition-colors cursor-pointer">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3.5 h-3.5">
+                      <path d="M4 4l8 8M12 4l-8 8" />
+                    </svg>
+                  </button>
+                </div>
+                {/* Section rows */}
+                <div className="px-3 py-3 space-y-1">
+                  {[
+                    { id: "git-branch", label: "Git Branch", desc: "Current branch, ahead/behind, and line changes", enabled: true },
+                    { id: "usage-limits", label: "Usage Limits", desc: "API usage and rate limit meters", enabled: true },
+                    { id: "github-pr", label: "GitHub PR", desc: "Pull request status, CI checks, and reviews", enabled: false },
+                    { id: "linear-issue", label: "Linear Issue", desc: "Linked Linear ticket and comments", enabled: true },
+                    { id: "mcp-servers", label: "MCP Servers", desc: "Model Context Protocol server connections", enabled: false },
+                    { id: "tasks", label: "Tasks", desc: "Agent task list and progress", enabled: true },
+                  ].map((s, i, arr) => (
+                    <div
+                      key={s.id}
+                      className={`flex items-center gap-2 px-2.5 py-2 rounded-lg border border-cc-border transition-opacity ${
+                        s.enabled ? "bg-cc-bg" : "bg-cc-hover/50 opacity-60"
+                      }`}
+                    >
+                      <div className="flex flex-col gap-0.5 shrink-0">
+                        <button disabled={i === 0} className="w-5 h-4 flex items-center justify-center text-cc-muted hover:text-cc-fg disabled:opacity-20 disabled:cursor-not-allowed cursor-pointer transition-colors">
+                          <svg viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3"><path d="M8 4l4 4H4l4-4z" /></svg>
+                        </button>
+                        <button disabled={i === arr.length - 1} className="w-5 h-4 flex items-center justify-center text-cc-muted hover:text-cc-fg disabled:opacity-20 disabled:cursor-not-allowed cursor-pointer transition-colors">
+                          <svg viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3"><path d="M8 12l4-4H4l4 4z" /></svg>
+                        </button>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-[12px] font-medium text-cc-fg block">{s.label}</span>
+                        <span className="text-[10px] text-cc-muted block truncate">{s.desc}</span>
+                      </div>
+                      <button
+                        className={`shrink-0 w-8 h-[18px] rounded-full transition-colors cursor-pointer relative ${
+                          s.enabled ? "bg-cc-primary" : "bg-cc-hover"
+                        }`}
+                        role="switch"
+                        aria-checked={s.enabled}
+                      >
+                        <span className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
+                          s.enabled ? "translate-x-[16px]" : "translate-x-[2px]"
+                        }`} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                {/* Footer */}
+                <div className="shrink-0 border-t border-cc-border px-3 py-2.5 flex items-center justify-between">
+                  <button className="text-[11px] text-cc-muted hover:text-cc-fg transition-colors cursor-pointer">Reset to defaults</button>
+                  <button className="text-[11px] font-medium text-cc-primary hover:text-cc-primary-hover transition-colors cursor-pointer">Done</button>
                 </div>
               </div>
             </Card>
@@ -1222,6 +1444,31 @@ export function Playground() {
             </Card>
           </div>
         </Section>
+        {/* ─── Update Overlay ──────────────────────────── */}
+        <Section title="Update Overlay" description="Full-screen overlay shown when auto-update is in progress, polls server and reloads when ready">
+          <div className="space-y-4">
+            <Card label="Installing phase">
+              <div className="relative h-[360px] bg-cc-bg rounded-lg overflow-hidden border border-cc-border">
+                <PlaygroundUpdateOverlay phase="installing" />
+              </div>
+            </Card>
+            <Card label="Restarting phase">
+              <div className="relative h-[360px] bg-cc-bg rounded-lg overflow-hidden border border-cc-border">
+                <PlaygroundUpdateOverlay phase="restarting" />
+              </div>
+            </Card>
+            <Card label="Waiting for server">
+              <div className="relative h-[360px] bg-cc-bg rounded-lg overflow-hidden border border-cc-border">
+                <PlaygroundUpdateOverlay phase="waiting" />
+              </div>
+            </Card>
+            <Card label="Update complete">
+              <div className="relative h-[360px] bg-cc-bg rounded-lg overflow-hidden border border-cc-border">
+                <PlaygroundUpdateOverlay phase="ready" />
+              </div>
+            </Card>
+          </div>
+        </Section>
         {/* ─── CLAUDE.md Editor ──────────────────────────────── */}
         <Section title="CLAUDE.md Editor" description="Modal for viewing and editing project CLAUDE.md instructions">
           <div className="space-y-4 max-w-3xl">
@@ -1233,7 +1480,157 @@ export function Playground() {
             </Card>
           </div>
         </Section>
+        {/* ─── Session Items ──────────────────────────────────── */}
+        <Section title="Session Items" description="Sidebar session rows — status dot, backend badge, Docker indicator, archive on hover">
+          <PlaygroundSessionItems />
+        </Section>
       </div>
+    </div>
+  );
+}
+
+// ─── Session Item Playground ─────────────────────────────────────────────────
+
+function mockSession(overrides: Partial<SessionItemType>): SessionItemType {
+  return {
+    id: `mock-${Math.random().toString(36).slice(2, 8)}`,
+    model: "claude-sonnet-4-20250514",
+    cwd: "/Users/dev/project",
+    gitBranch: "main",
+    isContainerized: false,
+    gitAhead: 0,
+    gitBehind: 0,
+    linesAdded: 0,
+    linesRemoved: 0,
+    isConnected: false,
+    status: null,
+    sdkState: null,
+    createdAt: Date.now(),
+    archived: false,
+    backendType: "claude",
+    repoRoot: "/Users/dev/project",
+    permCount: 0,
+    ...overrides,
+  };
+}
+
+const noopRef = { current: null };
+const noopSessionItemProps = {
+  onSelect: () => {},
+  onStartRename: () => {},
+  onArchive: (e: React.MouseEvent) => e.stopPropagation(),
+  onUnarchive: (e: React.MouseEvent) => e.stopPropagation(),
+  onDelete: (e: React.MouseEvent) => e.stopPropagation(),
+  onClearRecentlyRenamed: () => {},
+  editingSessionId: null,
+  editingName: "",
+  setEditingName: () => {},
+  onConfirmRename: () => {},
+  onCancelRename: () => {},
+  editInputRef: noopRef,
+};
+
+function PlaygroundSessionItems() {
+  return (
+    <div className="space-y-4 max-w-sm">
+      {/* Running — Claude Code */}
+      <Card label="Running — Claude Code">
+        <div className="bg-cc-sidebar rounded-lg p-1">
+          <SessionItem
+            session={mockSession({ isConnected: true, status: "running", backendType: "claude" })}
+            isActive={false}
+            sessionName="Refactor auth module"
+            permCount={0}
+            isRecentlyRenamed={false}
+            {...noopSessionItemProps}
+          />
+        </div>
+      </Card>
+
+      {/* Running — Codex + Docker */}
+      <Card label="Running — Codex + Docker">
+        <div className="bg-cc-sidebar rounded-lg p-1">
+          <SessionItem
+            session={mockSession({ isConnected: true, status: "running", backendType: "codex", isContainerized: true })}
+            isActive={false}
+            sessionName="Add payment flow"
+            permCount={0}
+            isRecentlyRenamed={false}
+            {...noopSessionItemProps}
+          />
+        </div>
+      </Card>
+
+      {/* Awaiting Input — 2 permissions */}
+      <Card label="Awaiting Input — 2 permissions pending">
+        <div className="bg-cc-sidebar rounded-lg p-1">
+          <SessionItem
+            session={mockSession({ isConnected: true, status: "running", backendType: "claude", permCount: 2 })}
+            isActive={false}
+            sessionName="Fix login bug"
+            permCount={2}
+            isRecentlyRenamed={false}
+            {...noopSessionItemProps}
+          />
+        </div>
+      </Card>
+
+      {/* Idle */}
+      <Card label="Idle — connected, not running">
+        <div className="bg-cc-sidebar rounded-lg p-1">
+          <SessionItem
+            session={mockSession({ isConnected: true, status: "idle", backendType: "claude" })}
+            isActive={false}
+            sessionName="Review PR #42"
+            permCount={0}
+            isRecentlyRenamed={false}
+            {...noopSessionItemProps}
+          />
+        </div>
+      </Card>
+
+      {/* Exited */}
+      <Card label="Exited — session stopped">
+        <div className="bg-cc-sidebar rounded-lg p-1">
+          <SessionItem
+            session={mockSession({ sdkState: "exited", backendType: "codex" })}
+            isActive={false}
+            sessionName="Deploy to staging"
+            permCount={0}
+            isRecentlyRenamed={false}
+            {...noopSessionItemProps}
+          />
+        </div>
+      </Card>
+
+      {/* Active (selected) */}
+      <Card label="Active (selected session)">
+        <div className="bg-cc-sidebar rounded-lg p-1">
+          <SessionItem
+            session={mockSession({ isConnected: true, status: "running", backendType: "claude", isContainerized: true })}
+            isActive={true}
+            sessionName="Build new dashboard"
+            permCount={0}
+            isRecentlyRenamed={false}
+            {...noopSessionItemProps}
+          />
+        </div>
+      </Card>
+
+      {/* Archived */}
+      <Card label="Archived session">
+        <div className="bg-cc-sidebar rounded-lg p-1">
+          <SessionItem
+            session={mockSession({ archived: true, backendType: "claude" })}
+            isActive={false}
+            isArchived={true}
+            sessionName="Old migration script"
+            permCount={0}
+            isRecentlyRenamed={false}
+            {...noopSessionItemProps}
+          />
+        </div>
+      </Card>
     </div>
   );
 }

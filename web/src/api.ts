@@ -1,4 +1,5 @@
 import type { SdkSessionInfo } from "./types.js";
+import type { ContentBlock } from "./types.js";
 import { captureEvent, captureException } from "./analytics.js";
 
 const BASE = "/api";
@@ -68,7 +69,8 @@ async function get<T = unknown>(path: string): Promise<T> {
   try {
     const res = await fetch(`${BASE}${path}`);
     if (!res.ok) {
-      const apiError = new Error(res.statusText);
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      const apiError = new Error(err.error || res.statusText);
       trackApiFailure("GET", path, nowMs() - startedAt, apiError, res.status);
       failureTracked = true;
       throw apiError;
@@ -196,15 +198,8 @@ export interface CreateSessionOpts {
   useWorktree?: boolean;
   backend?: "claude" | "codex";
   container?: ContainerCreateOpts;
-  /** Resume an existing Claude CLI session by its internal session ID */
-  resumeSessionId?: string;
-}
-
-export interface CliSessionInfo {
-  sessionId: string;
-  project: string;
-  cwd: string;
-  lastModified: number;
+  resumeSessionAt?: string;
+  forkSession?: boolean;
 }
 
 export interface BackendInfo {
@@ -217,6 +212,33 @@ export interface BackendModelInfo {
   value: string;
   label: string;
   description: string;
+}
+
+export interface ClaudeDiscoveredSession {
+  sessionId: string;
+  cwd: string;
+  gitBranch?: string;
+  slug?: string;
+  lastActivityAt: number;
+  sourceFile: string;
+}
+
+export interface ClaudeSessionHistoryMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  contentBlocks?: ContentBlock[];
+  timestamp: number;
+  model?: string;
+  stopReason?: string | null;
+}
+
+export interface ClaudeSessionHistoryPage {
+  sourceFile: string;
+  messages: ClaudeSessionHistoryMessage[];
+  nextCursor: number;
+  hasMore: boolean;
+  totalMessages: number;
 }
 
 export interface GitRepoInfo {
@@ -295,6 +317,15 @@ export interface TreeNode {
   children?: TreeNode[];
 }
 
+export interface UpdateInfo {
+  currentVersion: string;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  isServiceMode: boolean;
+  updateInProgress: boolean;
+  lastChecked: number;
+}
+
 export interface UsageLimits {
   five_hour: { utilization: number; resets_at: string | null } | null;
   seven_day: { utilization: number; resets_at: string | null } | null;
@@ -306,9 +337,88 @@ export interface UsageLimits {
   } | null;
 }
 
+export interface EditorStartResult {
+  available: boolean;
+  installed: boolean;
+  mode: "host" | "container";
+  url?: string;
+  message?: string;
+}
+
 export interface AppSettings {
   openrouterApiKeyConfigured: boolean;
   openrouterModel: string;
+  linearApiKeyConfigured: boolean;
+  linearAutoTransition: boolean;
+  linearAutoTransitionStateName: string;
+  editorTabEnabled: boolean;
+}
+
+export interface LinearWorkflowState {
+  id: string;
+  name: string;
+  type: string;
+}
+
+export interface LinearTeamStates {
+  id: string;
+  key: string;
+  name: string;
+  states: LinearWorkflowState[];
+}
+
+export interface LinearIssue {
+  id: string;
+  identifier: string;
+  title: string;
+  description: string;
+  url: string;
+  branchName: string;
+  priorityLabel: string;
+  stateName: string;
+  stateType: string;
+  teamName: string;
+  teamKey: string;
+  teamId: string;
+  assigneeName?: string;
+  updatedAt?: string;
+}
+
+export interface LinearConnectionInfo {
+  connected: boolean;
+  viewerName: string;
+  viewerEmail: string;
+  teamName: string;
+  teamKey: string;
+}
+
+export interface LinearComment {
+  id: string;
+  body: string;
+  createdAt: string;
+  userName: string;
+  userAvatarUrl?: string | null;
+}
+
+export interface LinearIssueDetail {
+  issue: LinearIssue | null;
+  comments?: LinearComment[];
+  assignee?: { name: string; avatarUrl?: string | null } | null;
+  labels?: { id: string; name: string; color: string }[];
+}
+
+export interface LinearProject {
+  id: string;
+  name: string;
+  state: string;
+}
+
+export interface LinearProjectMapping {
+  repoRoot: string;
+  projectId: string;
+  projectName: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface GitHubPRInfo {
@@ -373,6 +483,26 @@ export interface SavedPrompt {
   updatedAt: number;
 }
 
+// ─── Claude Config Browser ──────────────────────────────────────────────────
+
+export interface ClaudeConfigResponse {
+  project: {
+    root: string;
+    claudeMd: { path: string; content: string }[];
+    settings: { path: string; content: string } | null;
+    settingsLocal: { path: string; content: string } | null;
+    commands: { name: string; path: string }[];
+  };
+  user: {
+    root: string;
+    claudeMd: { path: string; content: string } | null;
+    skills: { slug: string; name: string; description: string; path: string }[];
+    agents: { name: string; path: string }[];
+    settings: { path: string; content: string } | null;
+    commands: { name: string; path: string }[];
+  };
+}
+
 // ─── SSE Session Creation ────────────────────────────────────────────────────
 
 export interface CreationProgressEvent {
@@ -386,6 +516,9 @@ export interface CreateSessionStreamResult {
   sessionId: string;
   state: string;
   cwd: string;
+  backendType?: "claude" | "codex";
+  resumeSessionAt?: string;
+  forkSession?: boolean;
 }
 
 /**
@@ -457,6 +590,17 @@ export const api = {
     ),
 
   listSessions: () => get<SdkSessionInfo[]>("/sessions"),
+  discoverClaudeSessions: (limit = 200) =>
+    get<{ sessions: ClaudeDiscoveredSession[] }>(
+      `/claude/sessions/discover?limit=${encodeURIComponent(String(limit))}`,
+    ),
+  getClaudeSessionHistory: (sessionId: string, opts?: { cursor?: number; limit?: number }) => {
+    const cursor = Math.max(0, Math.floor(opts?.cursor ?? 0));
+    const limit = Math.max(1, Math.floor(opts?.limit ?? 40));
+    return get<ClaudeSessionHistoryPage>(
+      `/claude/sessions/${encodeURIComponent(sessionId)}/history?cursor=${encodeURIComponent(String(cursor))}&limit=${encodeURIComponent(String(limit))}`,
+    );
+  },
 
   killSession: (sessionId: string) =>
     post(`/sessions/${encodeURIComponent(sessionId)}/kill`),
@@ -526,8 +670,57 @@ export const api = {
 
   // Settings
   getSettings: () => get<AppSettings>("/settings"),
-  updateSettings: (data: { openrouterApiKey?: string; openrouterModel?: string }) =>
-    put<AppSettings>("/settings", data),
+  updateSettings: (data: {
+    openrouterApiKey?: string;
+    openrouterModel?: string;
+    linearApiKey?: string;
+    linearAutoTransition?: boolean;
+    linearAutoTransitionStateId?: string;
+    linearAutoTransitionStateName?: string;
+    editorTabEnabled?: boolean;
+  }) => put<AppSettings>("/settings", data),
+  searchLinearIssues: (query: string, limit = 8) =>
+    get<{ issues: LinearIssue[] }>(
+      `/linear/issues?query=${encodeURIComponent(query)}&limit=${encodeURIComponent(String(limit))}`,
+    ),
+  getLinearConnection: () => get<LinearConnectionInfo>("/linear/connection"),
+  getLinearStates: () => get<{ teams: LinearTeamStates[] }>("/linear/states"),
+  transitionLinearIssue: (issueId: string) =>
+    post<{ ok: boolean; skipped: boolean }>(
+      `/linear/issues/${encodeURIComponent(issueId)}/transition`,
+      {},
+    ),
+  listLinearProjects: () => get<{ projects: LinearProject[] }>("/linear/projects"),
+  getLinearProjectIssues: (projectId: string, limit = 15) =>
+    get<{ issues: LinearIssue[] }>(
+      `/linear/project-issues?projectId=${encodeURIComponent(projectId)}&limit=${encodeURIComponent(String(limit))}`,
+    ),
+  getLinearProjectMapping: (repoRoot: string) =>
+    get<{ mapping: LinearProjectMapping | null }>(
+      `/linear/project-mappings?repoRoot=${encodeURIComponent(repoRoot)}`,
+    ),
+  upsertLinearProjectMapping: (data: {
+    repoRoot: string;
+    projectId: string;
+    projectName: string;
+  }) => put<{ mapping: LinearProjectMapping }>("/linear/project-mappings", data),
+  removeLinearProjectMapping: (repoRoot: string) =>
+    del<{ ok: boolean }>("/linear/project-mappings", { repoRoot }),
+
+  // Linear issue <-> session association
+  linkLinearIssue: (sessionId: string, issue: LinearIssue) =>
+    put<{ ok: boolean }>(`/sessions/${encodeURIComponent(sessionId)}/linear-issue`, issue),
+  unlinkLinearIssue: (sessionId: string) =>
+    del<{ ok: boolean }>(`/sessions/${encodeURIComponent(sessionId)}/linear-issue`),
+  getLinkedLinearIssue: (sessionId: string, refresh = false) =>
+    get<LinearIssueDetail>(
+      `/sessions/${encodeURIComponent(sessionId)}/linear-issue${refresh ? "?refresh=true" : ""}`,
+    ),
+  addLinearComment: (issueId: string, body: string) =>
+    post<{ ok: boolean; comment: LinearComment }>(
+      `/linear/issues/${encodeURIComponent(issueId)}/comments`,
+      { body },
+    ),
 
   // Git operations
   getRepoInfo: (path: string) =>
@@ -570,9 +763,6 @@ export const api = {
       `/git/pr-status?cwd=${encodeURIComponent(cwd)}&branch=${encodeURIComponent(branch)}`,
     ),
 
-  // CLI sessions (for resuming external sessions)
-  listCliSessions: () => get<CliSessionInfo[]>("/sessions/cli-sessions"),
-
   // Backends
   getBackends: () => get<BackendInfo[]>("/backends"),
   getBackendModels: (backendId: string) =>
@@ -594,7 +784,7 @@ export const api = {
 
   // Editor
   startEditor: (sessionId: string) =>
-    post<{ url: string }>(
+    post<EditorStartResult>(
       `/sessions/${encodeURIComponent(sessionId)}/editor/start`,
     ),
 
@@ -613,12 +803,18 @@ export const api = {
     get<{ path: string; diff: string }>(
       `/fs/diff?path=${encodeURIComponent(path)}${base ? `&base=${encodeURIComponent(base)}` : ""}`,
     ),
+  getChangedFiles: (cwd: string, base?: "last-commit" | "default-branch") =>
+    get<{ files: Array<{ path: string; status: string }> }>(
+      `/fs/changed-files?cwd=${encodeURIComponent(cwd)}${base ? `&base=${encodeURIComponent(base)}` : ""}`,
+    ),
   getClaudeMdFiles: (cwd: string) =>
     get<{ cwd: string; files: { path: string; content: string }[] }>(
       `/fs/claude-md?cwd=${encodeURIComponent(cwd)}`,
     ),
   saveClaudeMd: (path: string, content: string) =>
     put<{ ok: boolean; path: string }>("/fs/claude-md", { path, content }),
+  getClaudeConfig: (cwd: string) =>
+    get<ClaudeConfigResponse>(`/fs/claude-config?cwd=${encodeURIComponent(cwd)}`),
 
   // Usage limits
   getUsageLimits: () => get<UsageLimits>("/usage-limits"),

@@ -27,6 +27,11 @@ describe("settings-manager", () => {
     expect(getSettings()).toEqual({
       openrouterApiKey: "",
       openrouterModel: DEFAULT_OPENROUTER_MODEL,
+      linearApiKey: "",
+      linearAutoTransition: false,
+      linearAutoTransitionStateId: "",
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
       updatedAt: 0,
     });
   });
@@ -35,11 +40,13 @@ describe("settings-manager", () => {
     const updated = updateSettings({ openrouterApiKey: "or-key" });
     expect(updated.openrouterApiKey).toBe("or-key");
     expect(updated.openrouterModel).toBe(DEFAULT_OPENROUTER_MODEL);
+    expect(updated.linearApiKey).toBe("");
     expect(updated.updatedAt).toBeGreaterThan(0);
 
     const saved = JSON.parse(readFileSync(settingsPath, "utf-8"));
     expect(saved.openrouterApiKey).toBe("or-key");
     expect(saved.openrouterModel).toBe(DEFAULT_OPENROUTER_MODEL);
+    expect(saved.linearApiKey).toBe("");
   });
 
   it("loads existing settings from disk", () => {
@@ -48,6 +55,7 @@ describe("settings-manager", () => {
       JSON.stringify({
         openrouterApiKey: "existing",
         openrouterModel: "openai/gpt-4o-mini",
+        linearApiKey: "lin_api_abc",
         updatedAt: 123,
       }),
       "utf-8",
@@ -58,6 +66,11 @@ describe("settings-manager", () => {
     expect(getSettings()).toEqual({
       openrouterApiKey: "existing",
       openrouterModel: "openai/gpt-4o-mini",
+      linearApiKey: "lin_api_abc",
+      linearAutoTransition: false,
+      linearAutoTransitionStateId: "",
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
       updatedAt: 123,
     });
   });
@@ -75,6 +88,7 @@ describe("settings-manager", () => {
 
     expect(updated.openrouterApiKey).toBe("or-key");
     expect(updated.openrouterModel).toBe("openai/gpt-4o-mini");
+    expect(updated.linearApiKey).toBe("");
   });
 
   it("uses default model when empty model is provided", () => {
@@ -88,6 +102,7 @@ describe("settings-manager", () => {
       JSON.stringify({
         openrouterApiKey: 123,
         openrouterModel: null,
+        linearApiKey: 123,
         updatedAt: "x",
       }),
       "utf-8",
@@ -97,7 +112,39 @@ describe("settings-manager", () => {
     expect(getSettings()).toEqual({
       openrouterApiKey: "",
       openrouterModel: DEFAULT_OPENROUTER_MODEL,
+      linearApiKey: "",
+      linearAutoTransition: false,
+      linearAutoTransitionStateId: "",
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
       updatedAt: 0,
     });
+  });
+
+  it("updates linear key without touching openrouter settings", () => {
+    updateSettings({ openrouterApiKey: "or-key", openrouterModel: "openrouter/free" });
+    const updated = updateSettings({ linearApiKey: "lin_api_123" });
+
+    expect(updated.openrouterApiKey).toBe("or-key");
+    expect(updated.openrouterModel).toBe("openrouter/free");
+    expect(updated.linearApiKey).toBe("lin_api_123");
+  });
+
+  it("ignores undefined patch values and preserves existing keys", () => {
+    updateSettings({ openrouterApiKey: "or-key", linearApiKey: "lin_api_123" });
+    const updated = updateSettings({
+      openrouterApiKey: undefined,
+      openrouterModel: "openai/gpt-4o-mini",
+      linearApiKey: undefined,
+    });
+
+    expect(updated.openrouterApiKey).toBe("or-key");
+    expect(updated.openrouterModel).toBe("openai/gpt-4o-mini");
+    expect(updated.linearApiKey).toBe("lin_api_123");
+  });
+
+  it("updates editorTabEnabled", () => {
+    const updated = updateSettings({ editorTabEnabled: true });
+    expect(updated.editorTabEnabled).toBe(true);
   });
 });

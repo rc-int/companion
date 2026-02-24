@@ -2,7 +2,6 @@ import { Hono } from "hono";
 import { streamSSE, type SSEStreamingApi } from "hono/streaming";
 import { execSync } from "node:child_process";
 import { resolveBinary } from "./path-resolver.js";
-import { readdir, readFile, writeFile, stat } from "node:fs/promises";
 import { resolve, join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -13,67 +12,34 @@ import type { SessionStore } from "./session-store.js";
 import type { WorktreeTracker } from "./worktree-tracker.js";
 import type { TerminalManager } from "./terminal-manager.js";
 import * as envManager from "./env-manager.js";
-import * as promptManager from "./prompt-manager.js";
-import * as cronStore from "./cron-store.js";
 import * as gitUtils from "./git-utils.js";
 import * as sessionNames from "./session-names.js";
+import * as sessionLinearIssues from "./session-linear-issues.js";
 import { containerManager, ContainerManager, type ContainerConfig, type ContainerInfo } from "./container-manager.js";
 import type { CreationStepId } from "./session-types.js";
 import { hasContainerClaudeAuth } from "./claude-container-auth.js";
 import { hasContainerCodexAuth } from "./codex-container-auth.js";
-import { DEFAULT_OPENROUTER_MODEL, getSettings, updateSettings } from "./settings-manager.js";
-import { getUsageLimits } from "./usage-limits.js";
-import {
-  getUpdateState,
-  checkForUpdate,
-  isUpdateAvailable,
-} from "./update-checker.js";
 import { imagePullManager } from "./image-pull-manager.js";
+import { registerFsRoutes } from "./routes/fs-routes.js";
+import { registerSkillRoutes } from "./routes/skills-routes.js";
+import { registerEnvRoutes } from "./routes/env-routes.js";
+import { registerCronRoutes } from "./routes/cron-routes.js";
+import { registerPromptRoutes } from "./routes/prompt-routes.js";
+import { registerSettingsRoutes } from "./routes/settings-routes.js";
+import { registerGitRoutes } from "./routes/git-routes.js";
+import { registerSystemRoutes } from "./routes/system-routes.js";
+import { registerLinearRoutes } from "./routes/linear-routes.js";
+import { discoverClaudeSessions } from "./claude-session-discovery.js";
+import { getClaudeSessionHistoryPage } from "./claude-session-history.js";
 
 const UPDATE_CHECK_STALE_MS = 5 * 60 * 1000;
 const ROUTES_DIR = dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = dirname(ROUTES_DIR);
+const VSCODE_EDITOR_CONTAINER_PORT = 13337;
+const VSCODE_EDITOR_HOST_PORT = Number(process.env.COMPANION_EDITOR_PORT || "13338");
 
-function execCaptureStdout(
-  command: string,
-  options: { cwd: string; encoding: "utf-8"; timeout: number },
-): string {
-  try {
-    return execSync(command, options);
-  } catch (err: unknown) {
-    const maybe = err as { stdout?: Buffer | string };
-    if (typeof maybe.stdout === "string") return maybe.stdout;
-    if (maybe.stdout && Buffer.isBuffer(maybe.stdout)) {
-      return maybe.stdout.toString("utf-8");
-    }
-    throw err;
-  }
-}
-
-function resolveBranchDiffBases(
-  repoRoot: string,
-): string[] {
-  const options = { cwd: repoRoot, encoding: "utf-8", timeout: 5000 } as const;
-
-  try {
-    const originHead = execSync("git symbolic-ref refs/remotes/origin/HEAD", options).trim();
-    const match = originHead.match(/^refs\/remotes\/origin\/(.+)$/);
-    if (match?.[1]) {
-      return [`origin/${match[1]}`, match[1]];
-    }
-  } catch {
-    // No remote HEAD ref available, fallback to common local defaults.
-  }
-
-  try {
-    const branches = execSync("git branch --list main master", options).trim();
-    if (branches.includes("main")) return ["main"];
-    if (branches.includes("master")) return ["master"];
-  } catch {
-    // Ignore and use a conservative fallback below.
-  }
-
-  return ["main"];
+function shellEscapeArg(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 export function createRoutes(
@@ -93,6 +59,10 @@ export function createRoutes(
   api.post("/sessions/create", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     try {
+      const resumeSessionAt = typeof body.resumeSessionAt === "string" && body.resumeSessionAt.trim()
+        ? body.resumeSessionAt.trim()
+        : undefined;
+      const forkSession = body.forkSession === true;
       const backend = body.backend ?? "claude";
       if (backend !== "claude" && backend !== "codex") {
         return c.json({ error: `Invalid backend: ${String(backend)}` }, 400);
@@ -151,7 +121,10 @@ export function createRoutes(
           }
 
           if (repoInfo.currentBranch !== body.branch) {
-            gitUtils.checkoutBranch(repoInfo.repoRoot, body.branch);
+            gitUtils.checkoutOrCreateBranch(repoInfo.repoRoot, body.branch, {
+              createBranch: body.createBranch,
+              defaultBranch: repoInfo.defaultBranch,
+            });
           }
 
           const pullResult = gitUtils.gitPull(repoInfo.repoRoot);
@@ -210,12 +183,16 @@ export function createRoutes(
         }
 
         const tempId = crypto.randomUUID().slice(0, 8);
+        const requestedPorts = companionEnv?.ports
+          ?? (Array.isArray(body.container?.ports)
+            ? body.container.ports.map(Number).filter((n: number) => n > 0)
+            : []);
+        const containerPorts = Array.from(
+          new Set([...requestedPorts, VSCODE_EDITOR_CONTAINER_PORT]),
+        );
         const cConfig: ContainerConfig = {
           image: effectiveImage,
-          ports: companionEnv?.ports
-            ?? (Array.isArray(body.container?.ports)
-              ? body.container.ports.map(Number).filter((n: number) => n > 0)
-              : []),
+          ports: containerPorts,
           volumes: companionEnv?.volumes ?? body.container?.volumes,
           env: envVars,
         };
@@ -284,10 +261,8 @@ export function createRoutes(
         cwd,
         claudeBinary: body.claudeBinary,
         codexBinary: body.codexBinary,
-        codexInternetAccess: backend === "codex" && body.codexInternetAccess === true,
-        codexSandbox: backend === "codex" && body.codexInternetAccess === true
-          ? "danger-full-access"
-          : "workspace-write",
+        codexInternetAccess: backend === "codex",
+        codexSandbox: backend === "codex" ? "danger-full-access" : undefined,
         allowedTools: body.allowedTools,
         env: envVars,
         backendType: backend,
@@ -295,6 +270,8 @@ export function createRoutes(
         containerName,
         containerImage,
         containerCwd: containerInfo?.containerCwd,
+        resumeSessionAt,
+        forkSession,
       });
 
       // Re-track container with real session ID and mark session as containerized
@@ -343,6 +320,10 @@ export function createRoutes(
 
     return streamSSE(c, async (stream) => {
       try {
+        const resumeSessionAt = typeof body.resumeSessionAt === "string" && body.resumeSessionAt.trim()
+          ? body.resumeSessionAt.trim()
+          : undefined;
+        const forkSession = body.forkSession === true;
         const backend = body.backend ?? "claude";
         if (backend !== "claude" && backend !== "codex") {
           await stream.writeSSE({
@@ -411,7 +392,10 @@ export function createRoutes(
 
             if (repoInfo.currentBranch !== body.branch) {
               await emitProgress(stream, "checkout_branch", `Checking out ${body.branch}...`, "in_progress");
-              gitUtils.checkoutBranch(repoInfo.repoRoot, body.branch);
+              gitUtils.checkoutOrCreateBranch(repoInfo.repoRoot, body.branch, {
+                createBranch: body.createBranch,
+                defaultBranch: repoInfo.defaultBranch,
+              });
               await emitProgress(stream, "checkout_branch", `On branch ${body.branch}`, "done");
             }
 
@@ -495,12 +479,16 @@ export function createRoutes(
           // --- Step: Create container ---
           await emitProgress(stream, "creating_container", "Starting container...", "in_progress");
           const tempId = crypto.randomUUID().slice(0, 8);
+          const requestedPorts = companionEnv?.ports
+            ?? (Array.isArray(body.container?.ports)
+              ? body.container.ports.map(Number).filter((n: number) => n > 0)
+              : []);
+          const containerPorts = Array.from(
+            new Set([...requestedPorts, VSCODE_EDITOR_CONTAINER_PORT]),
+          );
           const cConfig: ContainerConfig = {
             image: effectiveImage,
-            ports: companionEnv?.ports
-              ?? (Array.isArray(body.container?.ports)
-                ? body.container.ports.map(Number).filter((n: number) => n > 0)
-                : []),
+            ports: containerPorts,
             volumes: companionEnv?.volumes ?? body.container?.volumes,
             env: envVars,
           };
@@ -598,10 +586,8 @@ export function createRoutes(
           cwd,
           claudeBinary: body.claudeBinary,
           codexBinary: body.codexBinary,
-          codexInternetAccess: backend === "codex" && body.codexInternetAccess === true,
-          codexSandbox: backend === "codex" && body.codexInternetAccess === true
-            ? "danger-full-access"
-            : "workspace-write",
+          codexInternetAccess: backend === "codex",
+          codexSandbox: backend === "codex" ? "danger-full-access" : undefined,
           allowedTools: body.allowedTools,
           env: envVars,
           backendType: backend,
@@ -609,6 +595,8 @@ export function createRoutes(
           containerName,
           containerImage,
           containerCwd: containerInfo?.containerCwd,
+          resumeSessionAt,
+          forkSession,
         });
 
         // Re-track container and mark session as containerized
@@ -638,6 +626,9 @@ export function createRoutes(
             sessionId: session.sessionId,
             state: session.state,
             cwd: session.cwd,
+            backendType: session.backendType,
+            resumeSessionAt: session.resumeSessionAt,
+            forkSession: session.forkSession,
           }),
         });
       } catch (e: unknown) {
@@ -660,6 +651,9 @@ export function createRoutes(
       const bridge = bridgeMap.get(s.sessionId);
       return {
         ...s,
+        // Bridge state is the source of truth for runtime cwd updates
+        // (notably containerized sessions mapped back to host paths).
+        cwd: bridge?.cwd || s.cwd,
         name: names[s.sessionId] ?? s.name,
         gitBranch: bridge?.git_branch || "",
         gitAhead: bridge?.git_ahead || 0,
@@ -676,6 +670,167 @@ export function createRoutes(
     const session = launcher.getSession(id);
     if (!session) return c.json({ error: "Session not found" }, 404);
     return c.json(session);
+  });
+
+  api.get("/claude/sessions/discover", (c) => {
+    const limitRaw = c.req.query("limit");
+    const limit = limitRaw ? Number(limitRaw) : undefined;
+    const sessions = discoverClaudeSessions({ limit });
+    return c.json({ sessions });
+  });
+
+  api.get("/claude/sessions/:id/history", (c) => {
+    const sessionId = c.req.param("id");
+    const limitRaw = c.req.query("limit");
+    const cursorRaw = c.req.query("cursor");
+    const limit = limitRaw !== undefined ? Number(limitRaw) : undefined;
+    const cursor = cursorRaw !== undefined ? Number(cursorRaw) : undefined;
+
+    const page = getClaudeSessionHistoryPage({
+      sessionId,
+      limit,
+      cursor,
+    });
+    if (!page) {
+      return c.json({ error: "Claude session history not found" }, 404);
+    }
+    return c.json(page);
+  });
+
+  api.post("/sessions/:id/editor/start", async (c) => {
+    const id = c.req.param("id");
+    const session = launcher.getSession(id);
+    if (!session) return c.json({ error: "Session not found" }, 404);
+
+    // For container sessions, try code-server inside the container first.
+    // If unavailable, fall through to host code-server with the host-mapped cwd.
+    let hostFallbackCwd = session.cwd;
+
+    if (session.containerId) {
+      const container = containerManager.getContainer(id);
+      const hasContainerCodeServer = container
+        && containerManager.hasBinaryInContainer(container.containerId, "code-server");
+
+      if (container && hasContainerCodeServer) {
+        const editorPathSuffix = `?folder=${encodeURIComponent("/workspace")}`;
+        const portMapping = container.portMappings.find(
+          (p) => p.containerPort === VSCODE_EDITOR_CONTAINER_PORT,
+        );
+        if (!portMapping) {
+          return c.json({
+            available: false,
+            installed: true,
+            mode: "container",
+            message: "Container editor port is missing. Start a new session to enable the VS Code editor.",
+          });
+        }
+
+        try {
+          const alive = containerManager.isContainerAlive(container.containerId);
+          if (alive === "stopped") {
+            containerManager.startContainer(container.containerId);
+          } else if (alive === "missing") {
+            return c.json({
+              available: false,
+              installed: true,
+              mode: "container",
+              message: "Session container no longer exists. Start a new session to use the editor.",
+            });
+          }
+
+          const startCmd = [
+            `if ! pgrep -f ${shellEscapeArg(`code-server.*--bind-addr 0.0.0.0:${VSCODE_EDITOR_CONTAINER_PORT}`)} >/dev/null 2>&1; then`,
+            `nohup code-server --auth none --disable-telemetry --bind-addr 0.0.0.0:${VSCODE_EDITOR_CONTAINER_PORT} /workspace >/tmp/companion-code-server.log 2>&1 &`,
+            "fi",
+          ].join(" ");
+          containerManager.execInContainer(container.containerId, ["sh", "-lc", startCmd], 10_000);
+
+          // Wait for code-server to be ready (up to 5s)
+          const containerEditorUrl = `http://localhost:${portMapping.hostPort}${editorPathSuffix}`;
+          for (let i = 0; i < 25; i++) {
+            try {
+              const res = await fetch(`http://127.0.0.1:${portMapping.hostPort}/healthz`);
+              if (res.ok || res.status === 302 || res.status === 200) break;
+            } catch {
+              // not ready yet
+            }
+            await new Promise((r) => setTimeout(r, 200));
+          }
+
+          return c.json({
+            available: true,
+            installed: true,
+            mode: "container",
+            url: containerEditorUrl,
+          });
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          return c.json({
+            available: false,
+            installed: true,
+            mode: "container",
+            message: `Failed to start VS Code editor in container: ${message}`,
+          });
+        }
+      }
+
+      // Container doesn't have code-server — fall through to host code-server
+      // using the host-mapped workspace path
+      if (container) {
+        hostFallbackCwd = container.hostCwd;
+      }
+    }
+
+    const hostCodeServer = resolveBinary("code-server");
+    if (!hostCodeServer) {
+      return c.json({
+        available: false,
+        installed: false,
+        mode: "host",
+        message: "VS Code editor is not installed. Install it with: brew install code-server",
+      });
+    }
+
+    const editorPathSuffix = `?folder=${encodeURIComponent(hostFallbackCwd)}`;
+
+    try {
+      const companionDir = join(homedir(), ".companion");
+      const logFile = join(companionDir, "code-server-host.log");
+      const startCmd = [
+        `if ! pgrep -f ${shellEscapeArg(`code-server.*--bind-addr 127.0.0.1:${VSCODE_EDITOR_HOST_PORT}`)} >/dev/null 2>&1; then`,
+        `nohup ${shellEscapeArg(hostCodeServer)} --auth none --disable-telemetry --bind-addr 127.0.0.1:${VSCODE_EDITOR_HOST_PORT} ${shellEscapeArg(hostFallbackCwd)} >> ${shellEscapeArg(logFile)} 2>&1 &`,
+        "fi",
+      ].join(" ");
+      const startHostCmd = `mkdir -p ${shellEscapeArg(companionDir)} && ${startCmd}`;
+      execSync(startHostCmd, { encoding: "utf-8", timeout: 10_000 });
+
+      // Wait for code-server to be ready (up to 5s)
+      const editorUrl = `http://localhost:${VSCODE_EDITOR_HOST_PORT}${editorPathSuffix}`;
+      for (let i = 0; i < 25; i++) {
+        try {
+          const res = await fetch(`http://127.0.0.1:${VSCODE_EDITOR_HOST_PORT}/healthz`);
+          if (res.ok || res.status === 302 || res.status === 200) break;
+        } catch {
+          // not ready yet
+        }
+        await new Promise((r) => setTimeout(r, 200));
+      }
+
+      return c.json({
+        available: true,
+        installed: true,
+        mode: "host",
+        url: editorUrl,
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      return c.json({
+        available: false,
+        installed: true,
+        mode: "host",
+        message: `Failed to start VS Code editor: ${message}`,
+      });
+    }
   });
 
   api.patch("/sessions/:id/name", async (c) => {
@@ -721,6 +876,7 @@ export function createRoutes(
 
     const worktreeResult = cleanupWorktree(id, true);
     prPoller?.unwatch(id);
+    sessionLinearIssues.removeLinearIssue(id);
     launcher.removeSession(id);
     wsBridge.closeSession(id);
     return c.json({ ok: true, worktree: worktreeResult });
@@ -844,895 +1000,26 @@ export function createRoutes(
     return c.json(images);
   });
 
-  // ─── Filesystem browsing ─────────────────────────────────────
+  registerFsRoutes(api);
+  registerEnvRoutes(api, { webDir: WEB_DIR });
 
-  api.get("/fs/list", async (c) => {
-    const rawPath = c.req.query("path") || homedir();
-    const basePath = resolve(rawPath);
-    try {
-      const entries = await readdir(basePath, { withFileTypes: true });
-      const dirs: { name: string; path: string }[] = [];
-      for (const entry of entries) {
-        if (entry.isDirectory() && !entry.name.startsWith(".")) {
-          dirs.push({ name: entry.name, path: join(basePath, entry.name) });
-        }
-      }
-      dirs.sort((a, b) => a.name.localeCompare(b.name));
-      return c.json({ path: basePath, dirs, home: homedir() });
-    } catch {
-      return c.json(
-        {
-          error: "Cannot read directory",
-          path: basePath,
-          dirs: [],
-          home: homedir(),
-        },
-        400,
-      );
-    }
+  registerPromptRoutes(api);
+  registerSettingsRoutes(api);
+
+  // ─── Linear ────────────────────────────────────────────────────────
+
+  registerLinearRoutes(api);
+
+  registerGitRoutes(api, prPoller);
+  registerSystemRoutes(api, {
+    launcher,
+    wsBridge,
+    terminalManager,
+    updateCheckStaleMs: UPDATE_CHECK_STALE_MS,
   });
 
-  api.get("/fs/home", (c) => {
-    const home = homedir();
-    const cwd = process.cwd();
-    // Only report cwd if the user launched companion from a real project directory
-    // (not from the package root or the home directory itself)
-    const packageRoot = process.env.__COMPANION_PACKAGE_ROOT;
-    const isProjectDir =
-      cwd !== home &&
-      (!packageRoot || !cwd.startsWith(packageRoot));
-    return c.json({ home, cwd: isProjectDir ? cwd : home });
-  });
-
-  // ─── Editor filesystem APIs ─────────────────────────────────────
-
-  /** Recursive directory tree for the editor file explorer */
-  api.get("/fs/tree", async (c) => {
-    const rawPath = c.req.query("path");
-    if (!rawPath) return c.json({ error: "path required" }, 400);
-    const basePath = resolve(rawPath);
-
-    interface TreeNode {
-      name: string;
-      path: string;
-      type: "file" | "directory";
-      children?: TreeNode[];
-    }
-
-    async function buildTree(dir: string, depth: number): Promise<TreeNode[]> {
-      if (depth > 10) return []; // Safety limit
-      try {
-        const entries = await readdir(dir, { withFileTypes: true });
-        const nodes: TreeNode[] = [];
-        for (const entry of entries) {
-          if (entry.name.startsWith(".") || entry.name === "node_modules")
-            continue;
-          const fullPath = join(dir, entry.name);
-          if (entry.isDirectory()) {
-            const children = await buildTree(fullPath, depth + 1);
-            nodes.push({
-              name: entry.name,
-              path: fullPath,
-              type: "directory",
-              children,
-            });
-          } else if (entry.isFile()) {
-            nodes.push({ name: entry.name, path: fullPath, type: "file" });
-          }
-        }
-        nodes.sort((a, b) => {
-          if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
-          return a.name.localeCompare(b.name);
-        });
-        return nodes;
-      } catch {
-        return [];
-      }
-    }
-
-    const tree = await buildTree(basePath, 0);
-    return c.json({ path: basePath, tree });
-  });
-
-  /** Read a single file */
-  api.get("/fs/read", async (c) => {
-    const filePath = c.req.query("path");
-    if (!filePath) return c.json({ error: "path required" }, 400);
-    const absPath = resolve(filePath);
-    try {
-      const info = await stat(absPath);
-      if (info.size > 2 * 1024 * 1024) {
-        return c.json({ error: "File too large (>2MB)" }, 413);
-      }
-      const content = await readFile(absPath, "utf-8");
-      return c.json({ path: absPath, content });
-    } catch (e: unknown) {
-      return c.json(
-        { error: e instanceof Error ? e.message : "Cannot read file" },
-        404,
-      );
-    }
-  });
-
-  /** Write a single file */
-  api.put("/fs/write", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    const { path: filePath, content } = body;
-    if (!filePath || typeof content !== "string") {
-      return c.json({ error: "path and content required" }, 400);
-    }
-    const absPath = resolve(filePath);
-    try {
-      await writeFile(absPath, content, "utf-8");
-      return c.json({ ok: true, path: absPath });
-    } catch (e: unknown) {
-      return c.json(
-        { error: e instanceof Error ? e.message : "Cannot write file" },
-        500,
-      );
-    }
-  });
-
-  /** Git diff for a single file (unified diff) */
-  api.get("/fs/diff", (c) => {
-    const filePath = c.req.query("path");
-    if (!filePath) return c.json({ error: "path required" }, 400);
-    const base = c.req.query("base"); // "last-commit" | "default-branch" | undefined
-    const absPath = resolve(filePath);
-    try {
-      const repoRoot = execSync("git rev-parse --show-toplevel", {
-        cwd: dirname(absPath),
-        encoding: "utf-8",
-        timeout: 5000,
-      }).trim();
-      const relPath = execSync(`git -C "${repoRoot}" ls-files --full-name -- "${absPath}"`, {
-        encoding: "utf-8",
-        timeout: 5000,
-      }).trim() || absPath;
-
-      let diff = "";
-
-      if (base === "default-branch") {
-        // Diff against the resolved default branch (origin/HEAD, main, master)
-        const diffBases = resolveBranchDiffBases(repoRoot);
-        for (const b of diffBases) {
-          try {
-            diff = execCaptureStdout(`git diff ${b} -- "${relPath}"`, {
-              cwd: repoRoot,
-              encoding: "utf-8",
-              timeout: 5000,
-            });
-            break;
-          } catch {
-            // If a base ref is unavailable, try the next candidate.
-          }
-        }
-      } else {
-        // Default ("last-commit" or absent): diff against HEAD (uncommitted changes only)
-        try {
-          diff = execCaptureStdout(`git diff HEAD -- "${relPath}"`, {
-            cwd: repoRoot,
-            encoding: "utf-8",
-            timeout: 5000,
-          });
-        } catch {
-          // HEAD may not exist in a fresh repo with no commits; fall through to untracked handling.
-        }
-      }
-
-      // For untracked files, the diff above is empty. Show full file as added.
-      if (!diff.trim()) {
-        const untracked = execSync(`git ls-files --others --exclude-standard -- "${relPath}"`, {
-          cwd: repoRoot,
-          encoding: "utf-8",
-          timeout: 5000,
-        }).trim();
-        if (untracked) {
-          diff = execCaptureStdout(`git diff --no-index -- /dev/null "${absPath}"`, {
-            cwd: repoRoot,
-            encoding: "utf-8",
-            timeout: 5000,
-          });
-        }
-      }
-
-      return c.json({ path: absPath, diff });
-    } catch {
-      return c.json({ path: absPath, diff: "" });
-    }
-  });
-
-  /** Find CLAUDE.md files for a project (root + .claude/) */
-  api.get("/fs/claude-md", async (c) => {
-    const cwd = c.req.query("cwd");
-    if (!cwd) return c.json({ error: "cwd required" }, 400);
-
-    // Resolve to absolute path to prevent path traversal
-    const resolvedCwd = resolve(cwd);
-
-    const candidates = [
-      join(resolvedCwd, "CLAUDE.md"),
-      join(resolvedCwd, ".claude", "CLAUDE.md"),
-    ];
-
-    const files: { path: string; content: string }[] = [];
-    for (const p of candidates) {
-      try {
-        const content = await readFile(p, "utf-8");
-        files.push({ path: p, content });
-      } catch {
-        // file doesn't exist — skip
-      }
-    }
-
-    return c.json({ cwd: resolvedCwd, files });
-  });
-
-  /** Create or update a CLAUDE.md file */
-  api.put("/fs/claude-md", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    const { path: filePath, content } = body;
-    if (!filePath || typeof content !== "string") {
-      return c.json({ error: "path and content required" }, 400);
-    }
-    // Only allow writing CLAUDE.md files
-    const base = filePath.split("/").pop();
-    if (base !== "CLAUDE.md") {
-      return c.json({ error: "Can only write CLAUDE.md files" }, 400);
-    }
-    const absPath = resolve(filePath);
-    // Verify the resolved path ends with CLAUDE.md or .claude/CLAUDE.md
-    if (!absPath.endsWith("/CLAUDE.md") && !absPath.endsWith("/.claude/CLAUDE.md")) {
-      return c.json({ error: "Invalid CLAUDE.md path" }, 400);
-    }
-    try {
-      // Ensure parent directory exists
-      const { mkdir } = await import("node:fs/promises");
-      await mkdir(dirname(absPath), { recursive: true });
-      await writeFile(absPath, content, "utf-8");
-      return c.json({ ok: true, path: absPath });
-    } catch (e: unknown) {
-      return c.json(
-        { error: e instanceof Error ? e.message : "Cannot write file" },
-        500,
-      );
-    }
-  });
-
-  // ─── Environments (~/.companion/envs/) ────────────────────────────
-
-  api.get("/envs", (c) => {
-    try {
-      return c.json(envManager.listEnvs());
-    } catch (e: unknown) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
-    }
-  });
-
-  api.get("/envs/:slug", (c) => {
-    const env = envManager.getEnv(c.req.param("slug"));
-    if (!env) return c.json({ error: "Environment not found" }, 404);
-    return c.json(env);
-  });
-
-  api.post("/envs", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    try {
-      const env = envManager.createEnv(body.name, body.variables || {}, {
-        dockerfile: body.dockerfile,
-        baseImage: body.baseImage,
-        ports: body.ports,
-        volumes: body.volumes,
-        initScript: body.initScript,
-      });
-      return c.json(env, 201);
-    } catch (e: unknown) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
-    }
-  });
-
-  api.put("/envs/:slug", async (c) => {
-    const slug = c.req.param("slug");
-    const body = await c.req.json().catch(() => ({}));
-    try {
-      const env = envManager.updateEnv(slug, {
-        name: body.name,
-        variables: body.variables,
-        dockerfile: body.dockerfile,
-        imageTag: body.imageTag,
-        baseImage: body.baseImage,
-        ports: body.ports,
-        volumes: body.volumes,
-        initScript: body.initScript,
-      });
-      if (!env) return c.json({ error: "Environment not found" }, 404);
-      return c.json(env);
-    } catch (e: unknown) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
-    }
-  });
-
-  api.delete("/envs/:slug", (c) => {
-    const deleted = envManager.deleteEnv(c.req.param("slug"));
-    if (!deleted) return c.json({ error: "Environment not found" }, 404);
-    return c.json({ ok: true });
-  });
-
-  // ─── Docker Image Builds ─────────────────────────────────────────
-
-  api.post("/envs/:slug/build", async (c) => {
-    const slug = c.req.param("slug");
-    const env = envManager.getEnv(slug);
-    if (!env) return c.json({ error: "Environment not found" }, 404);
-    if (!env.dockerfile) return c.json({ error: "No Dockerfile configured for this environment" }, 400);
-    if (!containerManager.checkDocker()) return c.json({ error: "Docker is not available" }, 503);
-
-    const tag = `companion-env-${slug}:latest`;
-    envManager.updateBuildStatus(slug, "building");
-
-    try {
-      const result = await containerManager.buildImageStreaming(env.dockerfile, tag);
-      if (result.success) {
-        envManager.updateBuildStatus(slug, "success", { imageTag: tag });
-        return c.json({ success: true, imageTag: tag, log: result.log });
-      } else {
-        envManager.updateBuildStatus(slug, "error", { error: result.log.slice(-500) });
-        return c.json({ success: false, log: result.log }, 500);
-      }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      envManager.updateBuildStatus(slug, "error", { error: msg });
-      return c.json({ success: false, error: msg }, 500);
-    }
-  });
-
-  api.get("/envs/:slug/build-status", (c) => {
-    const env = envManager.getEnv(c.req.param("slug"));
-    if (!env) return c.json({ error: "Environment not found" }, 404);
-    return c.json({
-      buildStatus: env.buildStatus || "idle",
-      buildError: env.buildError,
-      lastBuiltAt: env.lastBuiltAt,
-      imageTag: env.imageTag,
-    });
-  });
-
-  // ─── Saved Prompts (~/.companion/prompts.json) ──────────────────────
-
-  api.get("/prompts", (c) => {
-    try {
-      const cwd = c.req.query("cwd");
-      const scope = c.req.query("scope");
-      const normalizedScope =
-        scope === "global" || scope === "project" || scope === "all"
-          ? scope
-          : undefined;
-      return c.json(promptManager.listPrompts({ cwd, scope: normalizedScope }));
-    } catch (e: unknown) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
-    }
-  });
-
-  api.get("/prompts/:id", (c) => {
-    const prompt = promptManager.getPrompt(c.req.param("id"));
-    if (!prompt) return c.json({ error: "Prompt not found" }, 404);
-    return c.json(prompt);
-  });
-
-  api.post("/prompts", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    try {
-      const prompt = promptManager.createPrompt(
-        String(body.title || body.name || ""),
-        String(body.content || ""),
-        body.scope,
-        body.cwd,
-      );
-      return c.json(prompt, 201);
-    } catch (e: unknown) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
-    }
-  });
-
-  api.put("/prompts/:id", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    try {
-      const prompt = promptManager.updatePrompt(c.req.param("id"), {
-        name: body.title ?? body.name,
-        content: body.content,
-      });
-      if (!prompt) return c.json({ error: "Prompt not found" }, 404);
-      return c.json(prompt);
-    } catch (e: unknown) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
-    }
-  });
-
-  api.delete("/prompts/:id", (c) => {
-    const deleted = promptManager.deletePrompt(c.req.param("id"));
-    if (!deleted) return c.json({ error: "Prompt not found" }, 404);
-    return c.json({ ok: true });
-  });
-
-  api.post("/docker/build-base", async (c) => {
-    if (!containerManager.checkDocker()) return c.json({ error: "Docker is not available" }, 503);
-    // Build the-companion base image from the repo's Dockerfile
-    const dockerfilePath = join(WEB_DIR, "docker", "Dockerfile.the-companion");
-    if (!existsSync(dockerfilePath)) {
-      return c.json({ error: "Base Dockerfile not found at " + dockerfilePath }, 404);
-    }
-    try {
-      const log = containerManager.buildImage(dockerfilePath, "the-companion:latest");
-      return c.json({ success: true, log });
-    } catch (e: unknown) {
-      return c.json({ success: false, error: e instanceof Error ? e.message : String(e) }, 500);
-    }
-  });
-
-  api.get("/docker/base-image", (c) => {
-    const exists = containerManager.imageExists("the-companion:latest");
-    return c.json({ exists, image: "the-companion:latest" });
-  });
-
-  // ─── Image Pull Manager ──────────────────────────────────────────────
-
-  /** Get pull state for a Docker image */
-  api.get("/images/:tag/status", (c) => {
-    const tag = decodeURIComponent(c.req.param("tag"));
-    if (!tag) return c.json({ error: "Image tag is required" }, 400);
-    return c.json(imagePullManager.getState(tag));
-  });
-
-  /** Trigger a background pull for an image (idempotent) */
-  api.post("/images/:tag/pull", (c) => {
-    const tag = decodeURIComponent(c.req.param("tag"));
-    if (!tag) return c.json({ error: "Image tag is required" }, 400);
-    if (!containerManager.checkDocker()) {
-      return c.json({ error: "Docker is not available" }, 503);
-    }
-    imagePullManager.pull(tag);
-    return c.json({ ok: true, state: imagePullManager.getState(tag) });
-  });
-
-  // ─── Settings (~/.companion/settings.json) ────────────────────────
-
-  api.get("/settings", (c) => {
-    const settings = getSettings();
-    return c.json({
-      openrouterApiKeyConfigured: !!settings.openrouterApiKey.trim(),
-      openrouterModel: settings.openrouterModel || DEFAULT_OPENROUTER_MODEL,
-    });
-  });
-
-  api.put("/settings", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    if (body.openrouterApiKey !== undefined && typeof body.openrouterApiKey !== "string") {
-      return c.json({ error: "openrouterApiKey must be a string" }, 400);
-    }
-    if (body.openrouterModel !== undefined && typeof body.openrouterModel !== "string") {
-      return c.json({ error: "openrouterModel must be a string" }, 400);
-    }
-    if (body.openrouterApiKey === undefined && body.openrouterModel === undefined) {
-      return c.json({ error: "At least one settings field is required" }, 400);
-    }
-
-    const settings = updateSettings({
-      openrouterApiKey:
-        typeof body.openrouterApiKey === "string"
-          ? body.openrouterApiKey.trim()
-          : undefined,
-      openrouterModel:
-        typeof body.openrouterModel === "string"
-          ? (body.openrouterModel.trim() || DEFAULT_OPENROUTER_MODEL)
-          : undefined,
-    });
-
-    return c.json({
-      openrouterApiKeyConfigured: !!settings.openrouterApiKey.trim(),
-      openrouterModel: settings.openrouterModel || DEFAULT_OPENROUTER_MODEL,
-    });
-  });
-
-  // ─── Git operations ─────────────────────────────────────────────────
-
-  api.get("/git/repo-info", (c) => {
-    const path = c.req.query("path");
-    if (!path) return c.json({ error: "path required" }, 400);
-    const info = gitUtils.getRepoInfo(path);
-    if (!info) return c.json({ error: "Not a git repository" }, 400);
-    return c.json(info);
-  });
-
-  api.get("/git/branches", (c) => {
-    const repoRoot = c.req.query("repoRoot");
-    if (!repoRoot) return c.json({ error: "repoRoot required" }, 400);
-    try {
-      return c.json(gitUtils.listBranches(repoRoot));
-    } catch (e: unknown) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
-    }
-  });
-
-  api.post("/git/fetch", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    const { repoRoot } = body;
-    if (!repoRoot) return c.json({ error: "repoRoot required" }, 400);
-    return c.json(gitUtils.gitFetch(repoRoot));
-  });
-
-  api.get("/git/worktrees", (c) => {
-    const repoRoot = c.req.query("repoRoot");
-    if (!repoRoot) return c.json({ error: "repoRoot required" }, 400);
-    return c.json(gitUtils.listWorktrees(repoRoot));
-  });
-
-  api.post("/git/worktree", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    const { repoRoot, branch, baseBranch, createBranch } = body;
-    if (!repoRoot || !branch) return c.json({ error: "repoRoot and branch required" }, 400);
-    const result = gitUtils.ensureWorktree(repoRoot, branch, { baseBranch, createBranch });
-    return c.json(result);
-  });
-
-  api.delete("/git/worktree", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    const { repoRoot, worktreePath, force } = body;
-    if (!repoRoot || !worktreePath) return c.json({ error: "repoRoot and worktreePath required" }, 400);
-    const result = gitUtils.removeWorktree(repoRoot, worktreePath, { force });
-    return c.json(result);
-  });
-
-  api.post("/git/pull", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    const { cwd } = body;
-    if (!cwd) return c.json({ error: "cwd required" }, 400);
-    const result = gitUtils.gitPull(cwd);
-    // Return refreshed ahead/behind counts
-    let git_ahead = 0,
-      git_behind = 0;
-    try {
-      const counts = execSync(
-        "git rev-list --left-right --count @{upstream}...HEAD",
-        {
-          cwd,
-          encoding: "utf-8",
-          timeout: 3000,
-        },
-      ).trim();
-      const [behind, ahead] = counts.split(/\s+/).map(Number);
-      git_ahead = ahead || 0;
-      git_behind = behind || 0;
-    } catch {
-      /* no upstream */
-    }
-    return c.json({ ...result, git_ahead, git_behind });
-  });
-
-  // ─── GitHub PR Status ────────────────────────────────────────────────
-
-  api.get("/git/pr-status", async (c) => {
-    const cwd = c.req.query("cwd");
-    const branch = c.req.query("branch");
-    if (!cwd || !branch) return c.json({ error: "cwd and branch required" }, 400);
-
-    // Check poller cache first for instant response
-    if (prPoller) {
-      const cached = prPoller.getCached(cwd, branch);
-      if (cached) return c.json(cached);
-    }
-
-    const { isGhAvailable, fetchPRInfoAsync } = await import("./github-pr.js");
-    if (!isGhAvailable()) {
-      return c.json({ available: false, pr: null });
-    }
-
-    const pr = await fetchPRInfoAsync(cwd, branch);
-    return c.json({ available: true, pr });
-  });
-
-  // ─── Usage Limits ─────────────────────────────────────────────────────
-
-  api.get("/usage-limits", async (c) => {
-    const limits = await getUsageLimits();
-    return c.json(limits);
-  });
-
-  api.get("/sessions/:id/usage-limits", async (c) => {
-    const sessionId = c.req.param("id");
-    const session = wsBridge.getSession(sessionId);
-    const empty = { five_hour: null, seven_day: null, extra_usage: null };
-
-    if (session?.backendType === "codex") {
-      const rl = wsBridge.getCodexRateLimits(sessionId);
-      if (!rl) return c.json(empty);
-      const mapLimit = (l: { usedPercent: number; windowDurationMins: number; resetsAt: number } | null) => {
-        if (!l) return null;
-        return {
-          utilization: l.usedPercent,
-          resets_at: l.resetsAt ? new Date(l.resetsAt * 1000).toISOString() : null,
-        };
-      };
-      return c.json({
-        five_hour: mapLimit(rl.primary),
-        seven_day: mapLimit(rl.secondary),
-        extra_usage: null,
-      });
-    }
-
-    // Claude sessions: use existing logic
-    const limits = await getUsageLimits();
-    return c.json(limits);
-  });
-
-  // ─── Update checking ─────────────────────────────────────────────────
-
-  api.get("/update-check", async (c) => {
-    const initialState = getUpdateState();
-    const needsRefresh =
-      initialState.lastChecked === 0
-      || Date.now() - initialState.lastChecked > UPDATE_CHECK_STALE_MS;
-    if (needsRefresh) {
-      await checkForUpdate();
-    }
-
-    const state = getUpdateState();
-    return c.json({
-      currentVersion: state.currentVersion,
-      latestVersion: state.latestVersion,
-      updateAvailable: isUpdateAvailable(),
-      lastChecked: state.lastChecked,
-    });
-  });
-
-  api.post("/update-check", async (c) => {
-    await checkForUpdate();
-    const state = getUpdateState();
-    return c.json({
-      currentVersion: state.currentVersion,
-      latestVersion: state.latestVersion,
-      updateAvailable: isUpdateAvailable(),
-      lastChecked: state.lastChecked,
-    });
-  });
-
-
-  // ─── Terminal ──────────────────────────────────────────────────────
-
-  api.get("/terminal", (c) => {
-    const terminalId = c.req.query("terminalId");
-    const info = terminalManager.getInfo(terminalId || undefined);
-    if (!info) return c.json({ active: false });
-    return c.json({ active: true, terminalId: info.id, cwd: info.cwd });
-  });
-
-  api.post("/terminal/spawn", async (c) => {
-    const body = await c.req.json<{ cwd: string; cols?: number; rows?: number; containerId?: string }>();
-    if (!body.cwd) return c.json({ error: "cwd is required" }, 400);
-    const terminalId = terminalManager.spawn(body.cwd, body.cols, body.rows, {
-      containerId: body.containerId,
-    });
-    return c.json({ terminalId });
-  });
-
-  api.post("/terminal/kill", async (c) => {
-    const body = await c.req.json<{ terminalId?: string }>().catch(() => undefined);
-    const terminalId = body?.terminalId?.trim();
-    if (!terminalId) return c.json({ error: "terminalId is required" }, 400);
-    terminalManager.kill(terminalId);
-    return c.json({ ok: true });
-  });
-
-  // ─── Cross-session messaging ───────────────────────────────────────
-
-  api.post("/sessions/:id/message", async (c) => {
-    const id = c.req.param("id");
-    const session = launcher.getSession(id);
-    if (!session) return c.json({ error: "Session not found" }, 404);
-    if (!launcher.isAlive(id)) return c.json({ error: "Session is not running" }, 400);
-    const body = await c.req.json().catch(() => ({}));
-    if (typeof body.content !== "string" || !body.content.trim()) {
-      return c.json({ error: "content is required" }, 400);
-    }
-    wsBridge.injectUserMessage(id, body.content);
-    return c.json({ ok: true, sessionId: id });
-  });
-
-  // ─── Skills ─────────────────────────────────────────────────────────
-
-  const SKILLS_DIR = join(homedir(), ".claude", "skills");
-
-  api.get("/skills", async (c) => {
-    try {
-      if (!existsSync(SKILLS_DIR)) return c.json([]);
-      const entries = await readdir(SKILLS_DIR, { withFileTypes: true });
-      const skills = [];
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        const skillMdPath = join(SKILLS_DIR, entry.name, "SKILL.md");
-        if (!existsSync(skillMdPath)) continue;
-        const content = await readFile(skillMdPath, "utf-8");
-        // Parse frontmatter
-        const fmMatch = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-        let name = entry.name;
-        let description = "";
-        let body = content;
-        if (fmMatch) {
-          body = fmMatch[2];
-          for (const line of fmMatch[1].split("\n")) {
-            const nameMatch = line.match(/^name:\s*(.+)/);
-            if (nameMatch) name = nameMatch[1].trim().replace(/^["']|["']$/g, "");
-            const descMatch = line.match(/^description:\s*["']?(.+?)["']?\s*$/);
-            if (descMatch) description = descMatch[1];
-          }
-        }
-        skills.push({ slug: entry.name, name, description, path: skillMdPath });
-      }
-      return c.json(skills);
-    } catch (e) {
-      return c.json({ error: String(e) }, 500);
-    }
-  });
-
-  api.get("/skills/:slug", async (c) => {
-    const slug = c.req.param("slug");
-    if (!slug || slug.includes("..") || slug.includes("/") || slug.includes("\\")) {
-      return c.json({ error: "Invalid slug" }, 400);
-    }
-    const skillMdPath = join(SKILLS_DIR, slug, "SKILL.md");
-    if (!existsSync(skillMdPath)) return c.json({ error: "Skill not found" }, 404);
-    const content = await readFile(skillMdPath, "utf-8");
-    return c.json({ slug, path: skillMdPath, content });
-  });
-
-  api.post("/skills", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    const { name, description, content } = body;
-    if (!name || typeof name !== "string") {
-      return c.json({ error: "name is required" }, 400);
-    }
-    // Slugify: lowercase, replace non-alphanumeric with dashes
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-    if (!slug) return c.json({ error: "Invalid name" }, 400);
-
-    const skillDir = join(SKILLS_DIR, slug);
-    const skillMdPath = join(skillDir, "SKILL.md");
-
-    if (existsSync(skillMdPath)) {
-      return c.json({ error: `Skill "${slug}" already exists` }, 409);
-    }
-
-    const { mkdirSync, writeFileSync } = await import("node:fs");
-    mkdirSync(skillDir, { recursive: true });
-
-    const md = `---\nname: ${slug}\ndescription: ${JSON.stringify(description || `Skill: ${name}`)}\n---\n\n${content || `# ${name}\n\nDescribe what this skill does and how to use it.\n`}`;
-    writeFileSync(skillMdPath, md);
-
-    return c.json({ slug, name, description: description || `Skill: ${name}`, path: skillMdPath });
-  });
-
-  api.put("/skills/:slug", async (c) => {
-    const slug = c.req.param("slug");
-    if (!slug || slug.includes("..") || slug.includes("/") || slug.includes("\\")) {
-      return c.json({ error: "Invalid slug" }, 400);
-    }
-    const skillMdPath = join(SKILLS_DIR, slug, "SKILL.md");
-    if (!existsSync(skillMdPath)) return c.json({ error: "Skill not found" }, 404);
-    const body = await c.req.json().catch(() => ({}));
-    if (typeof body.content !== "string") {
-      return c.json({ error: "content is required" }, 400);
-    }
-    await writeFile(skillMdPath, body.content);
-    return c.json({ ok: true, slug, path: skillMdPath });
-  });
-
-  api.delete("/skills/:slug", async (c) => {
-    const slug = c.req.param("slug");
-    if (!slug || slug.includes("..") || slug.includes("/") || slug.includes("\\")) {
-      return c.json({ error: "Invalid slug" }, 400);
-    }
-    const skillDir = join(SKILLS_DIR, slug);
-    if (!existsSync(skillDir)) return c.json({ error: "Skill not found" }, 404);
-    const { rmSync } = await import("node:fs");
-    rmSync(skillDir, { recursive: true });
-    return c.json({ ok: true, slug });
-  });
-
-  // ─── Cron Jobs ──────────────────────────────────────────────────────
-
-  api.get("/cron/jobs", (c) => {
-    const jobs = cronStore.listJobs();
-    const enriched = jobs.map((j) => ({
-      ...j,
-      nextRunAt: cronScheduler?.getNextRunTime(j.id)?.getTime() ?? null,
-    }));
-    return c.json(enriched);
-  });
-
-  api.get("/cron/jobs/:id", (c) => {
-    const job = cronStore.getJob(c.req.param("id"));
-    if (!job) return c.json({ error: "Job not found" }, 404);
-    return c.json({
-      ...job,
-      nextRunAt: cronScheduler?.getNextRunTime(job.id)?.getTime() ?? null,
-    });
-  });
-
-  api.post("/cron/jobs", async (c) => {
-    const body = await c.req.json().catch(() => ({}));
-    try {
-      const job = cronStore.createJob({
-        name: body.name || "",
-        prompt: body.prompt || "",
-        schedule: body.schedule || "",
-        recurring: body.recurring ?? true,
-        backendType: body.backendType || "claude",
-        model: body.model || "",
-        cwd: body.cwd || "",
-        envSlug: body.envSlug,
-        enabled: body.enabled ?? true,
-        permissionMode: body.permissionMode || "bypassPermissions",
-        codexInternetAccess: body.codexInternetAccess,
-      });
-      if (job.enabled) cronScheduler?.scheduleJob(job);
-      return c.json(job, 201);
-    } catch (e: unknown) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
-    }
-  });
-
-  api.put("/cron/jobs/:id", async (c) => {
-    const id = c.req.param("id");
-    const body = await c.req.json().catch(() => ({}));
-    try {
-      // Only allow user-editable fields — prevent tampering with internal tracking
-      const allowed: Record<string, unknown> = {};
-      for (const key of ["name", "prompt", "schedule", "recurring", "backendType", "model", "cwd", "envSlug", "enabled", "permissionMode", "codexInternetAccess"] as const) {
-        if (key in body) allowed[key] = body[key];
-      }
-      const job = cronStore.updateJob(id, allowed);
-      if (!job) return c.json({ error: "Job not found" }, 404);
-      // Stop the old timer (id may differ from job.id after a rename)
-      if (job.id !== id) cronScheduler?.stopJob(id);
-      cronScheduler?.scheduleJob(job);
-      return c.json(job);
-    } catch (e: unknown) {
-      return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
-    }
-  });
-
-  api.delete("/cron/jobs/:id", (c) => {
-    const id = c.req.param("id");
-    cronScheduler?.stopJob(id);
-    const deleted = cronStore.deleteJob(id);
-    if (!deleted) return c.json({ error: "Job not found" }, 404);
-    return c.json({ ok: true });
-  });
-
-  api.post("/cron/jobs/:id/toggle", (c) => {
-    const id = c.req.param("id");
-    const job = cronStore.getJob(id);
-    if (!job) return c.json({ error: "Job not found" }, 404);
-    const updated = cronStore.updateJob(id, { enabled: !job.enabled });
-    if (updated?.enabled) {
-      cronScheduler?.scheduleJob(updated);
-    } else {
-      cronScheduler?.stopJob(id);
-    }
-    return c.json(updated);
-  });
-
-  api.post("/cron/jobs/:id/run", (c) => {
-    const id = c.req.param("id");
-    const job = cronStore.getJob(id);
-    if (!job) return c.json({ error: "Job not found" }, 404);
-    cronScheduler?.executeJobManually(id);
-    return c.json({ ok: true, message: "Job triggered" });
-  });
-
-  api.get("/cron/jobs/:id/executions", (c) => {
-    const id = c.req.param("id");
-    return c.json(cronScheduler?.getExecutions(id) ?? []);
-  });
+  registerSkillRoutes(api);
+  registerCronRoutes(api, cronScheduler);
 
   // ─── Worktree cleanup helper ────────────────────────────────────
 

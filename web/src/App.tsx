@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useStore } from "./store.js";
 import { connectSession } from "./ws.js";
 import { api } from "./api.js";
@@ -10,14 +10,28 @@ import { TopBar } from "./components/TopBar.js";
 import { HomePage } from "./components/HomePage.js";
 import { TaskPanel } from "./components/TaskPanel.js";
 import { DiffPanel } from "./components/DiffPanel.js";
-import { Playground } from "./components/Playground.js";
-import { SettingsPage } from "./components/SettingsPage.js";
-import { PromptsPage } from "./components/PromptsPage.js";
-import { EnvManager } from "./components/EnvManager.js";
-import { CronManager } from "./components/CronManager.js";
-import { TerminalPage } from "./components/TerminalPage.js";
 import { SessionLaunchOverlay } from "./components/SessionLaunchOverlay.js";
 import { SessionTerminalDock } from "./components/SessionTerminalDock.js";
+import { SessionEditorPane } from "./components/SessionEditorPane.js";
+import { UpdateOverlay } from "./components/UpdateOverlay.js";
+
+// Lazy-loaded route-level pages (not needed for initial render)
+const Playground = lazy(() => import("./components/Playground.js").then((m) => ({ default: m.Playground })));
+const SettingsPage = lazy(() => import("./components/SettingsPage.js").then((m) => ({ default: m.SettingsPage })));
+const IntegrationsPage = lazy(() => import("./components/IntegrationsPage.js").then((m) => ({ default: m.IntegrationsPage })));
+const LinearSettingsPage = lazy(() => import("./components/LinearSettingsPage.js").then((m) => ({ default: m.LinearSettingsPage })));
+const PromptsPage = lazy(() => import("./components/PromptsPage.js").then((m) => ({ default: m.PromptsPage })));
+const EnvManager = lazy(() => import("./components/EnvManager.js").then((m) => ({ default: m.EnvManager })));
+const CronManager = lazy(() => import("./components/CronManager.js").then((m) => ({ default: m.CronManager })));
+const TerminalPage = lazy(() => import("./components/TerminalPage.js").then((m) => ({ default: m.TerminalPage })));
+
+function LazyFallback() {
+  return (
+    <div className="flex items-center justify-center h-full">
+      <div className="text-sm text-cc-muted">Loading...</div>
+    </div>
+  );
+}
 
 function useHash() {
   return useSyncExternalStore(
@@ -33,14 +47,20 @@ export default function App() {
   const taskPanelOpen = useStore((s) => s.taskPanelOpen);
   const homeResetKey = useStore((s) => s.homeResetKey);
   const activeTab = useStore((s) => s.activeTab);
+  const editorTabEnabled = useStore((s) => s.editorTabEnabled);
+  const setEditorTabEnabled = useStore((s) => s.setEditorTabEnabled);
+  const setActiveTab = useStore((s) => s.setActiveTab);
   const sessionCreating = useStore((s) => s.sessionCreating);
   const sessionCreatingBackend = useStore((s) => s.sessionCreatingBackend);
   const creationProgress = useStore((s) => s.creationProgress);
   const creationError = useStore((s) => s.creationError);
+  const updateOverlayActive = useStore((s) => s.updateOverlayActive);
   const hash = useHash();
   const route = useMemo(() => parseHash(hash), [hash]);
   const isSettingsPage = route.page === "settings";
   const isPromptsPage = route.page === "prompts";
+  const isIntegrationsPage = route.page === "integrations";
+  const isLinearIntegrationPage = route.page === "integration-linear";
   const isTerminalPage = route.page === "terminal";
   const isEnvironmentsPage = route.page === "environments";
   const isScheduledPage = route.page === "scheduled";
@@ -53,6 +73,18 @@ export default function App() {
   useEffect(() => {
     document.documentElement.classList.toggle("dark", darkMode);
   }, [darkMode]);
+
+  useEffect(() => {
+    api.getSettings().then((settings) => {
+      setEditorTabEnabled(settings.editorTabEnabled);
+    }).catch(() => {});
+  }, [setEditorTabEnabled]);
+
+  useEffect(() => {
+    if (!editorTabEnabled && activeTab === "editor") {
+      setActiveTab("chat");
+    }
+  }, [editorTabEnabled, activeTab, setActiveTab]);
 
   // Capture the localStorage-restored session ID during render (before any effects run)
   // so the mount logic can use it even if the hash-sync branch would clear it.
@@ -83,13 +115,35 @@ export default function App() {
     // For other pages (settings, terminal, etc.), preserve currentSessionId
   }, [route]);
 
+  // Keep git changed-files count in sync for the badge regardless of which tab is active.
+  // DiffPanel does the same when mounted; this covers the case where the diff tab is closed.
+  const changedFilesTick = useStore((s) => currentSessionId ? s.changedFilesTick.get(currentSessionId) ?? 0 : 0);
+  const diffBase = useStore((s) => s.diffBase);
+  const setGitChangedFilesCount = useStore((s) => s.setGitChangedFilesCount);
+  const sessionCwd = useStore((s) => {
+    if (!currentSessionId) return null;
+    return s.sessions.get(currentSessionId)?.cwd
+      || s.sdkSessions.find((sdk) => sdk.sessionId === currentSessionId)?.cwd
+      || null;
+  });
+  useEffect(() => {
+    if (!currentSessionId || !sessionCwd) return;
+    let cancelled = false;
+    api.getChangedFiles(sessionCwd, diffBase).then(({ files }) => {
+      if (cancelled) return;
+      const prefix = `${sessionCwd}/`;
+      const count = files.filter((f) => f.path === sessionCwd || f.path.startsWith(prefix)).length;
+      setGitChangedFilesCount(currentSessionId, count);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [currentSessionId, sessionCwd, diffBase, changedFilesTick, setGitChangedFilesCount]);
 
   if (route.page === "playground") {
-    return <Playground />;
+    return <Suspense fallback={<LazyFallback />}><Playground /></Suspense>;
   }
 
   return (
-    <div className="h-[100dvh] flex font-sans-ui bg-cc-bg text-cc-fg antialiased">
+    <div className="h-[100dvh] flex font-sans-ui bg-cc-bg text-cc-fg antialiased pt-safe">
       {/* Mobile overlay backdrop */}
       {sidebarOpen && (
         <div
@@ -116,31 +170,43 @@ export default function App() {
         <div className="flex-1 overflow-hidden relative">
           {isSettingsPage && (
             <div className="absolute inset-0">
-              <SettingsPage embedded />
+              <Suspense fallback={<LazyFallback />}><SettingsPage embedded /></Suspense>
             </div>
           )}
 
           {isPromptsPage && (
             <div className="absolute inset-0">
-              <PromptsPage embedded />
+              <Suspense fallback={<LazyFallback />}><PromptsPage embedded /></Suspense>
+            </div>
+          )}
+
+          {isIntegrationsPage && (
+            <div className="absolute inset-0">
+              <Suspense fallback={<LazyFallback />}><IntegrationsPage embedded /></Suspense>
+            </div>
+          )}
+
+          {isLinearIntegrationPage && (
+            <div className="absolute inset-0">
+              <Suspense fallback={<LazyFallback />}><LinearSettingsPage embedded /></Suspense>
             </div>
           )}
 
           {isTerminalPage && (
             <div className="absolute inset-0">
-              <TerminalPage />
+              <Suspense fallback={<LazyFallback />}><TerminalPage /></Suspense>
             </div>
           )}
 
           {isEnvironmentsPage && (
             <div className="absolute inset-0">
-              <EnvManager embedded />
+              <Suspense fallback={<LazyFallback />}><EnvManager embedded /></Suspense>
             </div>
           )}
 
           {isScheduledPage && (
             <div className="absolute inset-0">
-              <CronManager embedded />
+              <Suspense fallback={<LazyFallback />}><CronManager embedded /></Suspense>
             </div>
           )}
 
@@ -156,13 +222,15 @@ export default function App() {
                         onClosePanel={() => useStore.getState().setActiveTab("chat")}
                       />
                     )
-                    : (
-                      <SessionTerminalDock sessionId={currentSessionId} suppressPanel>
-                        {activeTab === "diff"
-                          ? <DiffPanel sessionId={currentSessionId} />
-                          : <ChatView sessionId={currentSessionId} />}
-                      </SessionTerminalDock>
-                    )
+                    : activeTab === "editor" && editorTabEnabled
+                      ? <SessionEditorPane sessionId={currentSessionId} />
+                      : (
+                        <SessionTerminalDock sessionId={currentSessionId} suppressPanel>
+                          {activeTab === "diff"
+                            ? <DiffPanel sessionId={currentSessionId} />
+                            : <ChatView sessionId={currentSessionId} />}
+                        </SessionTerminalDock>
+                      )
                 ) : (
                   <HomePage key={homeResetKey} />
                 )}
@@ -219,6 +287,7 @@ export default function App() {
           </div>
         </>
       )}
+      <UpdateOverlay active={updateOverlayActive} />
     </div>
   );
 }

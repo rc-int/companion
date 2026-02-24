@@ -1,29 +1,18 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef, type ComponentType } from "react";
 import { useStore } from "../store.js";
-import { api, type UsageLimits, type GitHubPRInfo } from "../api.js";
+import { api, type UsageLimits, type GitHubPRInfo, type LinearIssue, type LinearComment } from "../api.js";
 import type { TaskItem } from "../types.js";
 import { McpSection } from "./McpPanel.js";
+import { LinearLogo } from "./LinearLogo.js";
+import { ClaudeConfigBrowser } from "./ClaudeConfigBrowser.js";
+import { SECTION_DEFINITIONS } from "./task-panel-sections.js";
+import { formatResetTime, formatCodexResetTime, formatWindowDuration, formatTokenCount } from "../utils/format.js";
+import { timeAgo } from "../utils/time-ago.js";
+import { captureException } from "../analytics.js";
+import { SectionErrorBoundary } from "./SectionErrorBoundary.js";
 
 const EMPTY_TASKS: TaskItem[] = [];
-const POLL_INTERVAL = 60_000;
-
-// Module-level cache — survives session switches so limits don't flash empty
-const limitsCache = new Map<string, UsageLimits>();
-
-function formatResetTime(resetsAt: string): string {
-  try {
-    const diffMs = new Date(resetsAt).getTime() - Date.now();
-    if (diffMs <= 0) return "now";
-    const days = Math.floor(diffMs / 86_400_000);
-    const hours = Math.floor((diffMs % 86_400_000) / 3_600_000);
-    const minutes = Math.floor((diffMs % 3_600_000) / 60_000);
-    if (days > 0) return `${days}d ${hours}h${minutes}m`;
-    if (hours > 0) return `${hours}h${minutes}m`;
-    return `${minutes}m`;
-  } catch {
-    return "N/A";
-  }
-}
+const COUNTDOWN_REFRESH_MS = 30_000;
 
 function barColor(pct: number): string {
   if (pct > 80) return "bg-cc-error";
@@ -32,37 +21,32 @@ function barColor(pct: number): string {
 }
 
 function UsageLimitsSection({ sessionId }: { sessionId: string }) {
-  const [limits, setLimits] = useState<UsageLimits | null>(
-    limitsCache.get(sessionId) ?? null,
-  );
+  const [limits, setLimits] = useState<UsageLimits | null>(null);
 
   const fetchLimits = useCallback(async () => {
     try {
       const data = await api.getSessionUsageLimits(sessionId);
-      limitsCache.set(sessionId, data);
       setLimits(data);
     } catch {
       // silent
     }
   }, [sessionId]);
 
-  // When sessionId changes, show cached value immediately
-  useEffect(() => {
-    setLimits(limitsCache.get(sessionId) ?? null);
-  }, [sessionId]);
-
+  // Single interval: fetch every 60s, tick every 30s for countdown refresh
+  const fetchTickRef = useRef(0);
   useEffect(() => {
     fetchLimits();
-    const id = setInterval(fetchLimits, POLL_INTERVAL);
+    const id = setInterval(() => {
+      fetchTickRef.current += 1;
+      if (fetchTickRef.current % 2 === 0) {
+        fetchLimits();
+      } else {
+        // Force re-render to refresh "resets in" countdown display
+        setLimits((prev) => (prev ? { ...prev } : null));
+      }
+    }, COUNTDOWN_REFRESH_MS);
     return () => clearInterval(id);
   }, [fetchLimits]);
-
-  // Also tick every 30s to refresh the "resets in" countdown
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 30_000);
-    return () => clearInterval(id);
-  }, []);
 
   if (!limits) return null;
 
@@ -158,23 +142,6 @@ function UsageLimitsSection({ sessionId }: { sessionId: string }) {
 
 // ─── Codex Rate Limits ───────────────────────────────────────────────────────
 
-function formatCodexResetTime(resetsAtMs: number): string {
-  const diffMs = resetsAtMs - Date.now();
-  if (diffMs <= 0) return "now";
-  const days = Math.floor(diffMs / 86_400_000);
-  const hours = Math.floor((diffMs % 86_400_000) / 3_600_000);
-  const minutes = Math.floor((diffMs % 3_600_000) / 60_000);
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h${minutes}m`;
-  return `${minutes}m`;
-}
-
-function formatWindowDuration(mins: number): string {
-  if (mins >= 1440) return `${Math.round(mins / 1440)}d`;
-  if (mins >= 60) return `${Math.round(mins / 60)}h`;
-  return `${mins}m`;
-}
-
 function CodexRateLimitsSection({ sessionId }: { sessionId: string }) {
   const rateLimits = useStore((s) => s.sessions.get(sessionId)?.codex_rate_limits);
 
@@ -182,7 +149,7 @@ function CodexRateLimitsSection({ sessionId }: { sessionId: string }) {
   const [, setTick] = useState(0);
   useEffect(() => {
     if (!rateLimits) return;
-    const id = setInterval(() => setTick((t) => t + 1), 30_000);
+    const id = setInterval(() => setTick((t) => t + 1), COUNTDOWN_REFRESH_MS);
     return () => clearInterval(id);
   }, [rateLimits]);
 
@@ -243,12 +210,6 @@ function CodexRateLimitsSection({ sessionId }: { sessionId: string }) {
 }
 
 // ─── Codex Token Details ─────────────────────────────────────────────────────
-
-function formatTokenCount(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
-}
 
 function CodexTokenDetailsSection({ sessionId }: { sessionId: string }) {
   const details = useStore((s) => s.sessions.get(sessionId)?.codex_token_details);
@@ -446,22 +407,374 @@ function GitHubPRSection({ sessionId }: { sessionId: string }) {
   return <GitHubPRDisplay pr={prStatus.pr} />;
 }
 
-// ─── Task Panel ──────────────────────────────────────────────────────────────
+// ─── Linear Issue Section ────────────────────────────────────────────────────
 
-export { CodexRateLimitsSection, CodexTokenDetailsSection };
+const LINEAR_POLL_INTERVAL = 60_000;
 
-export function TaskPanel({ sessionId }: { sessionId: string }) {
-  const tasks = useStore((s) => s.sessionTasks.get(sessionId) || EMPTY_TASKS);
+function linearStatePill(stateType: string, stateName: string) {
+  switch (stateType) {
+    case "completed":
+      return { label: stateName || "Done", cls: "text-cc-success bg-cc-success/10" };
+    case "cancelled":
+      return { label: stateName || "Cancelled", cls: "text-cc-muted bg-cc-hover" };
+    case "started":
+      return { label: stateName || "In Progress", cls: "text-blue-400 bg-blue-400/10" };
+    case "unstarted":
+      return { label: stateName || "Todo", cls: "text-cc-muted bg-cc-hover" };
+    case "backlog":
+      return { label: stateName || "Backlog", cls: "text-cc-muted bg-cc-hover" };
+    default:
+      return { label: stateName || stateType || "Unknown", cls: "text-cc-muted bg-cc-hover" };
+  }
+}
+
+function LinearIssueSection({ sessionId }: { sessionId: string }) {
+  const linkedIssue = useStore((s) => s.linkedLinearIssues.get(sessionId));
+  const [comments, setComments] = useState<LinearComment[]>([]);
+  const [assignee, setAssignee] = useState<{ name: string; avatarUrl?: string | null } | null>(null);
+  const [labels, setLabels] = useState<{ id: string; name: string; color: string }[]>([]);
+  const [commentText, setCommentText] = useState("");
+  const [sendingComment, setSendingComment] = useState(false);
+  const [showDoneWarning, setShowDoneWarning] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<LinearIssue[]>([]);
+  const [searching, setSearching] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Load stored linked issue from server on mount
+  useEffect(() => {
+    api.getLinkedLinearIssue(sessionId).then((data) => {
+      if (data.issue) {
+        useStore.getState().setLinkedLinearIssue(sessionId, data.issue);
+      }
+    }).catch(() => {});
+  }, [sessionId]);
+
+  // Fetch fresh data from Linear periodically
+  const fetchIssueDetails = useCallback(async () => {
+    if (!linkedIssue) return;
+    try {
+      const data = await api.getLinkedLinearIssue(sessionId, true);
+      if (data.issue) {
+        useStore.getState().setLinkedLinearIssue(sessionId, data.issue);
+        if (data.issue.stateType === "completed") {
+          setShowDoneWarning(true);
+        }
+      }
+      if (data.comments) setComments(data.comments);
+      if (data.assignee !== undefined) setAssignee(data.assignee ?? null);
+      if (data.labels) setLabels(data.labels);
+    } catch {
+      // silent
+    }
+  }, [sessionId, linkedIssue]);
+
+  useEffect(() => {
+    if (!linkedIssue) return;
+    fetchIssueDetails();
+    const id = setInterval(fetchIssueDetails, LINEAR_POLL_INTERVAL);
+    return () => clearInterval(id);
+  }, [fetchIssueDetails, linkedIssue]);
+
+  // Search debounce
+  useEffect(() => {
+    if (!showSearch) return;
+    const q = searchQuery.trim();
+    if (q.length < 2) { setSearchResults([]); return; }
+    let active = true;
+    setSearching(true);
+    const timer = setTimeout(() => {
+      api.searchLinearIssues(q, 6).then((res) => {
+        if (active) setSearchResults(res.issues);
+      }).catch(() => {
+        if (active) setSearchResults([]);
+      }).finally(() => {
+        if (active) setSearching(false);
+      });
+    }, 400);
+    return () => { active = false; clearTimeout(timer); };
+  }, [searchQuery, showSearch]);
+
+  // Focus search input when search opens
+  useEffect(() => {
+    if (showSearch) {
+      setTimeout(() => searchInputRef.current?.focus(), 50);
+    }
+  }, [showSearch]);
+
+  async function handleSendComment() {
+    if (!linkedIssue || !commentText.trim() || sendingComment) return;
+    setSendingComment(true);
+    try {
+      const result = await api.addLinearComment(linkedIssue.id, commentText.trim());
+      setComments((prev) => [...prev, result.comment]);
+      setCommentText("");
+    } catch {
+      // silent
+    } finally {
+      setSendingComment(false);
+    }
+  }
+
+  async function handleUnlink() {
+    try {
+      await api.unlinkLinearIssue(sessionId);
+      useStore.getState().setLinkedLinearIssue(sessionId, null);
+      setComments([]);
+      setAssignee(null);
+      setLabels([]);
+      setShowDoneWarning(false);
+    } catch {
+      // silent
+    }
+  }
+
+  async function handleLinkIssue(issue: LinearIssue) {
+    try {
+      await api.linkLinearIssue(sessionId, issue);
+      useStore.getState().setLinkedLinearIssue(sessionId, issue);
+      setShowSearch(false);
+      setSearchQuery("");
+      setSearchResults([]);
+    } catch {
+      // silent
+    }
+  }
+
+  // No linked issue — show "Link" button or search
+  if (!linkedIssue) {
+    return (
+      <div className="shrink-0 px-4 py-3 border-b border-cc-border">
+        {!showSearch ? (
+          <button
+            onClick={() => setShowSearch(true)}
+            className="flex items-center gap-1.5 text-[11px] text-cc-muted hover:text-cc-fg transition-colors cursor-pointer"
+          >
+            <LinearLogo className="w-3.5 h-3.5" />
+            Link Linear issue
+          </button>
+        ) : (
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5">
+              <LinearLogo className="w-3.5 h-3.5 text-cc-muted shrink-0" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search issues..."
+                aria-label="Search Linear issues"
+                className="flex-1 text-[11px] bg-transparent border border-cc-border rounded-md px-2 py-1.5 text-cc-fg placeholder:text-cc-muted focus:outline-none focus:border-cc-primary/50"
+              />
+              <button
+                onClick={() => { setShowSearch(false); setSearchQuery(""); setSearchResults([]); }}
+                className="text-cc-muted hover:text-cc-fg transition-colors cursor-pointer"
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3.5 h-3.5">
+                  <path d="M4 4l8 8M12 4l-8 8" />
+                </svg>
+              </button>
+            </div>
+            {searching && (
+              <p className="text-[10px] text-cc-muted">Searching...</p>
+            )}
+            {searchResults.length > 0 && (
+              <div className="space-y-0.5 max-h-48 overflow-y-auto">
+                {searchResults.map((issue) => (
+                  <button
+                    key={issue.id}
+                    onClick={() => handleLinkIssue(issue)}
+                    className="w-full text-left px-2 py-1.5 rounded-md hover:bg-cc-hover transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] font-mono-code text-cc-primary shrink-0">{issue.identifier}</span>
+                      <span className={`text-[9px] font-medium px-1 rounded-full leading-[14px] ${linearStatePill(issue.stateType, issue.stateName).cls}`}>
+                        {linearStatePill(issue.stateType, issue.stateName).label}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-cc-muted truncate mt-0.5">{issue.title}</p>
+                  </button>
+                ))}
+              </div>
+            )}
+            {searchQuery.trim().length >= 2 && !searching && searchResults.length === 0 && (
+              <p className="text-[10px] text-cc-muted text-center py-2">No issues found</p>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Linked issue display
+  const pill = linearStatePill(linkedIssue.stateType, linkedIssue.stateName);
+
+  return (
+    <div className="shrink-0 border-b border-cc-border">
+      {/* Header: identifier + state pill + unlink */}
+      <div className="px-4 py-3 space-y-2">
+        <div className="flex items-center gap-1.5">
+          <LinearLogo className="w-3.5 h-3.5 text-cc-muted shrink-0" />
+          <a
+            href={linkedIssue.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[12px] font-semibold text-cc-fg hover:text-cc-primary transition-colors font-mono-code"
+          >
+            {linkedIssue.identifier}
+          </a>
+          <span className={`text-[9px] font-medium px-1.5 rounded-full leading-[16px] ${pill.cls}`}>
+            {pill.label}
+          </span>
+          <button
+            onClick={handleUnlink}
+            className="ml-auto flex items-center justify-center w-5 h-5 rounded text-cc-muted hover:text-cc-fg hover:bg-cc-hover transition-colors cursor-pointer"
+            title="Unlink issue"
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3 h-3">
+              <path d="M4 4l8 8M12 4l-8 8" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Title */}
+        <p className="text-[11px] text-cc-muted truncate" title={linkedIssue.title}>
+          {linkedIssue.title}
+        </p>
+
+        {/* Metadata: priority + team + assignee */}
+        <div className="flex items-center gap-2 text-[10px] text-cc-muted">
+          {linkedIssue.priorityLabel && (
+            <span>{linkedIssue.priorityLabel}</span>
+          )}
+          {linkedIssue.teamName && (
+            <>
+              {linkedIssue.priorityLabel && <span>&middot;</span>}
+              <span>{linkedIssue.teamName}</span>
+            </>
+          )}
+          {assignee && (
+            <>
+              <span>&middot;</span>
+              <span>@ {assignee.name}</span>
+            </>
+          )}
+        </div>
+
+        {/* Labels */}
+        {labels.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {labels.map((l) => (
+              <span
+                key={l.id}
+                className="text-[9px] px-1.5 py-0.5 rounded-full"
+                style={{ backgroundColor: `${l.color}20`, color: l.color }}
+              >
+                {l.name}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Done warning */}
+      {showDoneWarning && linkedIssue.stateType === "completed" && (
+        <div className="px-4 py-2 bg-cc-success/10 border-t border-cc-success/20 flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-[11px] text-cc-success font-medium">Issue completed</p>
+            <p className="text-[10px] text-cc-success/80">Ticket moved to done.</p>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              onClick={() => setShowDoneWarning(false)}
+              className="text-[10px] text-cc-muted hover:text-cc-fg px-1.5 py-0.5 rounded cursor-pointer"
+            >
+              Dismiss
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  await api.archiveSession(sessionId);
+                  useStore.getState().newSession();
+                } catch {
+                  // silent
+                }
+              }}
+              className="text-[10px] text-cc-success font-medium px-2 py-0.5 rounded bg-cc-success/20 hover:bg-cc-success/30 cursor-pointer"
+            >
+              Close session
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Recent comments */}
+      {comments.length > 0 && (
+        <div className="px-4 py-2 border-t border-cc-border space-y-1.5 max-h-36 overflow-y-auto">
+          <span className="text-[10px] text-cc-muted uppercase tracking-wider">Comments</span>
+          {comments.slice(-3).map((comment) => (
+            <div key={comment.id} className="text-[11px]">
+              <div className="flex items-center gap-1">
+                <span className="font-medium text-cc-fg">{comment.userName}</span>
+                <span className="text-[9px] text-cc-muted">{timeAgo(new Date(comment.createdAt).getTime())}</span>
+              </div>
+              <p className="text-cc-muted line-clamp-2">{comment.body}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add comment input */}
+      <div className="px-4 py-2 border-t border-cc-border flex items-center gap-1.5">
+        <input
+          type="text"
+          value={commentText}
+          onChange={(e) => setCommentText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSendComment(); } }}
+          placeholder="Add a comment..."
+          aria-label="Add a comment"
+          className="flex-1 text-[11px] bg-transparent border border-cc-border rounded-md px-2 py-1.5 text-cc-fg placeholder:text-cc-muted focus:outline-none focus:border-cc-primary/50"
+        />
+        <button
+          onClick={handleSendComment}
+          disabled={!commentText.trim() || sendingComment}
+          className="flex items-center justify-center w-6 h-6 rounded text-cc-primary disabled:text-cc-muted cursor-pointer disabled:cursor-not-allowed transition-colors"
+          title="Send comment"
+        >
+          <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
+            <path d="M1.724 1.053a.5.5 0 0 0-.714.545l1.403 4.85a.5.5 0 0 0 .397.354l5.19.736-5.19.737a.5.5 0 0 0-.397.353L1.01 13.48a.5.5 0 0 0 .714.545l13-6.5a.5.5 0 0 0 0-.894l-13-6.5z" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Extracted Section Components ─────────────────────────────────────────────
+
+/** Wrapper that renders the correct usage/rate-limit component based on backend type */
+function UsageLimitsRenderer({ sessionId }: { sessionId: string }) {
   const session = useStore((s) => s.sessions.get(sessionId));
   const sdk = useStore((s) => s.sdkSessions.find((x) => x.sessionId === sessionId));
-  const sdkBackendType = sdk?.backendType;
-  const taskPanelOpen = useStore((s) => s.taskPanelOpen);
-  const setTaskPanelOpen = useStore((s) => s.setTaskPanelOpen);
-  if (!taskPanelOpen) return null;
+  const isCodex = (session?.backend_type || sdk?.backendType) === "codex";
 
-  const completedCount = tasks.filter((t) => t.status === "completed").length;
-  const isCodex = (session?.backend_type || sdkBackendType) === "codex";
-  const showTasks = !!session && !isCodex;
+  if (isCodex) {
+    return (
+      <>
+        <CodexRateLimitsSection sessionId={sessionId} />
+        <CodexTokenDetailsSection sessionId={sessionId} />
+      </>
+    );
+  }
+  return <UsageLimitsSection sessionId={sessionId} />;
+}
+
+/** Git branch info — extracted from inline JSX in TaskPanel */
+function GitBranchSection({ sessionId }: { sessionId: string }) {
+  const session = useStore((s) => s.sessions.get(sessionId));
+  const sdk = useStore((s) => s.sdkSessions.find((x) => x.sessionId === sessionId));
+
   const branch = session?.git_branch || sdk?.gitBranch;
   const branchAhead = session?.git_ahead || 0;
   const branchBehind = session?.git_behind || 0;
@@ -469,15 +782,260 @@ export function TaskPanel({ sessionId }: { sessionId: string }) {
   const lineRemoves = session?.total_lines_removed || 0;
   const branchCwd = session?.repo_root || session?.cwd || sdk?.cwd;
 
+  if (!branch) return null;
+
+  return (
+    <div className="shrink-0 px-4 py-3 border-b border-cc-border space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] text-cc-muted uppercase tracking-wider">
+          Branch
+        </span>
+        {session?.is_containerized && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400">container</span>
+        )}
+      </div>
+      <p className="text-xs font-mono-code text-cc-fg truncate" title={branch}>
+        {branch}
+      </p>
+      {(branchAhead > 0 || branchBehind > 0 || lineAdds > 0 || lineRemoves > 0) && (
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-[11px]">
+            {branchAhead > 0 && <span className="text-green-500">{branchAhead}&#8593;</span>}
+            {branchBehind > 0 && <span className="text-cc-warning">{branchBehind}&#8595;</span>}
+            {lineAdds > 0 && <span className="text-green-500">+{lineAdds}</span>}
+            {lineRemoves > 0 && <span className="text-red-400">-{lineRemoves}</span>}
+          </div>
+          {branchBehind > 0 && branchCwd && (
+            <button
+              type="button"
+              className="text-[11px] font-medium text-cc-warning hover:text-amber-400 transition-colors cursor-pointer"
+              onClick={() => {
+                api.gitPull(branchCwd).then((r) => {
+                  useStore.getState().updateSession(sessionId, {
+                    git_ahead: r.git_ahead,
+                    git_behind: r.git_behind,
+                  });
+                  if (!r.success) captureException(new Error(`git pull failed: ${r.output}`));
+                }).catch((e) => captureException(e));
+              }}
+              title="Pull latest changes"
+            >
+              Pull
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Tasks section — only visible for Claude Code sessions */
+function TasksSection({ sessionId }: { sessionId: string }) {
+  const tasks = useStore((s) => s.sessionTasks.get(sessionId) || EMPTY_TASKS);
+  const session = useStore((s) => s.sessions.get(sessionId));
+  const sdk = useStore((s) => s.sdkSessions.find((x) => x.sessionId === sessionId));
+  const isCodex = (session?.backend_type || sdk?.backendType) === "codex";
+
+  if (!session || isCodex) return null;
+
+  const completedCount = tasks.filter((t) => t.status === "completed").length;
+
+  return (
+    <>
+      {/* Task section header */}
+      <div className="px-4 py-2.5 border-b border-cc-border flex items-center justify-between">
+        <span className="text-[12px] font-semibold text-cc-fg">Tasks</span>
+        {tasks.length > 0 && (
+          <span className="text-[11px] text-cc-muted tabular-nums">
+            {completedCount}/{tasks.length}
+          </span>
+        )}
+      </div>
+
+      {/* Task list */}
+      <div className="px-3 py-2">
+        {tasks.length === 0 ? (
+          <p className="text-xs text-cc-muted text-center py-8">No tasks yet</p>
+        ) : (
+          <div className="space-y-0.5">
+            {tasks.map((task) => (
+              <TaskRow key={task.id} task={task} />
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+// ─── Section Component Map ───────────────────────────────────────────────────
+
+const SECTION_COMPONENTS: Record<string, ComponentType<{ sessionId: string }>> = {
+  "usage-limits": UsageLimitsRenderer,
+  "git-branch": GitBranchSection,
+  "github-pr": GitHubPRSection,
+  "linear-issue": LinearIssueSection,
+  "mcp-servers": McpSection,
+  "tasks": TasksSection,
+};
+
+// ─── Panel Config View ───────────────────────────────────────────────────────
+
+function TaskPanelConfigView({ isCodex }: { isCodex: boolean }) {
+  const config = useStore((s) => s.taskPanelConfig);
+  const toggleSectionEnabled = useStore((s) => s.toggleSectionEnabled);
+  const moveSectionUp = useStore((s) => s.moveSectionUp);
+  const moveSectionDown = useStore((s) => s.moveSectionDown);
+  const resetTaskPanelConfig = useStore((s) => s.resetTaskPanelConfig);
+  const setConfigMode = useStore((s) => s.setTaskPanelConfigMode);
+
+  const backendFilter = isCodex ? "codex" : "claude";
+
+  // Only show sections applicable to the current backend
+  const applicableOrder = config.order.filter((id) => {
+    const def = SECTION_DEFINITIONS.find((d) => d.id === id);
+    if (!def) return false;
+    if (def.backends && !def.backends.includes(backendFilter)) return false;
+    return true;
+  });
+
+  return (
+    <div className="flex-1 flex flex-col min-h-0">
+      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-1">
+        {applicableOrder.map((sectionId, index) => {
+          const def = SECTION_DEFINITIONS.find((d) => d.id === sectionId)!;
+          const enabled = config.enabled[sectionId] ?? true;
+          const isFirst = index === 0;
+          const isLast = index === applicableOrder.length - 1;
+
+          return (
+            <div
+              key={sectionId}
+              data-testid={`config-section-${sectionId}`}
+              className={`flex items-center gap-2 px-2.5 py-2 rounded-lg border border-cc-border transition-opacity ${
+                enabled ? "bg-cc-bg" : "bg-cc-hover/50 opacity-60"
+              }`}
+            >
+              {/* Move up/down buttons */}
+              <div className="flex flex-col gap-0.5 shrink-0">
+                <button
+                  onClick={() => moveSectionUp(sectionId)}
+                  disabled={isFirst}
+                  className="w-5 h-4 flex items-center justify-center text-cc-muted hover:text-cc-fg disabled:opacity-20 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                  title="Move up"
+                  data-testid={`move-up-${sectionId}`}
+                >
+                  <svg viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3">
+                    <path d="M8 4l4 4H4l4-4z" />
+                  </svg>
+                </button>
+                <button
+                  onClick={() => moveSectionDown(sectionId)}
+                  disabled={isLast}
+                  className="w-5 h-4 flex items-center justify-center text-cc-muted hover:text-cc-fg disabled:opacity-20 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                  title="Move down"
+                  data-testid={`move-down-${sectionId}`}
+                >
+                  <svg viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3">
+                    <path d="M8 12l4-4H4l4 4z" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Section info */}
+              <div className="flex-1 min-w-0">
+                <span className="text-[12px] font-medium text-cc-fg block">
+                  {def.label}
+                </span>
+                <span className="text-[10px] text-cc-muted block truncate">
+                  {def.description}
+                </span>
+              </div>
+
+              {/* Toggle switch */}
+              <button
+                onClick={() => toggleSectionEnabled(sectionId)}
+                className={`shrink-0 w-8 h-[18px] rounded-full transition-colors cursor-pointer relative ${
+                  enabled ? "bg-cc-primary" : "bg-cc-hover"
+                }`}
+                title={enabled ? "Hide section" : "Show section"}
+                role="switch"
+                aria-checked={enabled}
+                data-testid={`toggle-${sectionId}`}
+              >
+                <span
+                  className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow transition-transform ${
+                    enabled ? "translate-x-[16px]" : "translate-x-[2px]"
+                  }`}
+                />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Footer buttons */}
+      <div className="shrink-0 border-t border-cc-border px-3 py-2.5 flex items-center justify-between">
+        <button
+          onClick={() => resetTaskPanelConfig()}
+          className="text-[11px] text-cc-muted hover:text-cc-fg transition-colors cursor-pointer"
+          data-testid="reset-panel-config"
+        >
+          Reset to defaults
+        </button>
+        <button
+          onClick={() => setConfigMode(false)}
+          className="text-[11px] font-medium text-cc-primary hover:text-cc-primary-hover transition-colors cursor-pointer"
+          data-testid="config-done"
+        >
+          Done
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Task Panel ──────────────────────────────────────────────────────────────
+
+export { CodexRateLimitsSection, CodexTokenDetailsSection };
+
+export function TaskPanel({ sessionId }: { sessionId: string }) {
+  const session = useStore((s) => s.sessions.get(sessionId));
+  const sdk = useStore((s) => s.sdkSessions.find((x) => x.sessionId === sessionId));
+  const taskPanelOpen = useStore((s) => s.taskPanelOpen);
+  const setTaskPanelOpen = useStore((s) => s.setTaskPanelOpen);
+  const configMode = useStore((s) => s.taskPanelConfigMode);
+  const config = useStore((s) => s.taskPanelConfig);
+
+  if (!taskPanelOpen) return null;
+
+  const isCodex = (session?.backend_type || sdk?.backendType) === "codex";
+  const backendFilter = isCodex ? "codex" : "claude";
+
+  // Filter and order sections based on config + backend compatibility
+  const applicableSections = config.order.filter((sectionId) => {
+    const def = SECTION_DEFINITIONS.find((d) => d.id === sectionId);
+    if (!def) return false;
+    if (def.backends && !def.backends.includes(backendFilter)) return false;
+    return true;
+  });
+
   return (
     <aside className="w-[320px] h-full flex flex-col overflow-hidden bg-cc-card border-l border-cc-border">
       {/* Header */}
       <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-cc-border">
         <span className="text-sm font-semibold text-cc-fg tracking-tight">
-          Context
+          {configMode ? "Panel Settings" : "Context"}
         </span>
         <button
-          onClick={() => setTaskPanelOpen(false)}
+          onClick={() => {
+            if (configMode) {
+              useStore.getState().setTaskPanelConfigMode(false);
+            } else {
+              setTaskPanelOpen(false);
+            }
+          }}
+          aria-label="Close panel"
           className="flex items-center justify-center w-6 h-6 rounded-lg text-cc-muted hover:text-cc-fg hover:bg-cc-hover transition-colors cursor-pointer"
         >
           <svg
@@ -492,95 +1050,42 @@ export function TaskPanel({ sessionId }: { sessionId: string }) {
         </button>
       </div>
 
-      <div data-testid="task-panel-content" className="min-h-0 flex-1 overflow-y-auto">
-        {/* Usage limits — Claude Code uses REST-polled limits, Codex uses streamed rate limits */}
-        {isCodex ? (
-          <>
-            <CodexRateLimitsSection sessionId={sessionId} />
-            <CodexTokenDetailsSection sessionId={sessionId} />
-          </>
-        ) : (
-          <UsageLimitsSection sessionId={sessionId} />
-        )}
-
-        {/* Git branch snapshot — moved from composer for cleaner input surface */}
-        {branch && (
-          <div className="shrink-0 px-4 py-3 border-b border-cc-border space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] text-cc-muted uppercase tracking-wider">
-                Branch
-              </span>
-              {session?.is_containerized && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400">container</span>
-              )}
-            </div>
-            <p className="text-xs font-mono-code text-cc-fg truncate" title={branch}>
-              {branch}
-            </p>
-            {(branchAhead > 0 || branchBehind > 0 || lineAdds > 0 || lineRemoves > 0) && (
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5 text-[11px]">
-                  {branchAhead > 0 && <span className="text-green-500">{branchAhead}&#8593;</span>}
-                  {branchBehind > 0 && <span className="text-cc-warning">{branchBehind}&#8595;</span>}
-                  {lineAdds > 0 && <span className="text-green-500">+{lineAdds}</span>}
-                  {lineRemoves > 0 && <span className="text-red-400">-{lineRemoves}</span>}
-                </div>
-                {branchBehind > 0 && branchCwd && (
-                  <button
-                    type="button"
-                    className="text-[11px] font-medium text-cc-warning hover:text-amber-400 transition-colors cursor-pointer"
-                    onClick={() => {
-                      api.gitPull(branchCwd).then((r) => {
-                        useStore.getState().updateSession(sessionId, {
-                          git_ahead: r.git_ahead,
-                          git_behind: r.git_behind,
-                        });
-                        if (!r.success) console.warn("[git pull]", r.output);
-                      }).catch((e) => console.error("[git pull]", e));
-                    }}
-                    title="Pull latest changes"
-                  >
-                    Pull
-                  </button>
-                )}
-              </div>
-            )}
+      {configMode ? (
+        <TaskPanelConfigView isCodex={isCodex} />
+      ) : (
+        <>
+          <div data-testid="task-panel-content" className="min-h-0 flex-1 overflow-y-auto">
+            <ClaudeConfigBrowser sessionId={sessionId} />
+            {applicableSections
+              .filter((id) => config.enabled[id] !== false)
+              .map((sectionId) => {
+                const Component = SECTION_COMPONENTS[sectionId];
+                if (!Component) return null;
+                const label = SECTION_DEFINITIONS.find((d) => d.id === sectionId)?.label;
+                return (
+                  <SectionErrorBoundary key={sectionId} label={label}>
+                    <Component sessionId={sessionId} />
+                  </SectionErrorBoundary>
+                );
+              })}
           </div>
-        )}
 
-        {/* GitHub PR status */}
-        <GitHubPRSection sessionId={sessionId} />
-
-        {/* MCP servers */}
-        <McpSection sessionId={sessionId} />
-
-        {showTasks && (
-          <>
-            {/* Task section header */}
-            <div className="px-4 py-2.5 border-b border-cc-border flex items-center justify-between">
-              <span className="text-[12px] font-semibold text-cc-fg">Tasks</span>
-              {tasks.length > 0 && (
-                <span className="text-[11px] text-cc-muted tabular-nums">
-                  {completedCount}/{tasks.length}
-                </span>
-              )}
-            </div>
-
-            {/* Task list */}
-            <div className="px-3 py-2">
-              {tasks.length === 0 ? (
-                <p className="text-xs text-cc-muted text-center py-8">No tasks yet</p>
-              ) : (
-                <div className="space-y-0.5">
-                  {tasks.map((task) => (
-                    <TaskRow key={task.id} task={task} />
-                  ))}
-                </div>
-              )}
-            </div>
-          </>
-        )}
-      </div>
+          {/* Settings button at bottom */}
+          <div className="shrink-0 border-t border-cc-border px-4 py-2">
+            <button
+              onClick={() => useStore.getState().setTaskPanelConfigMode(true)}
+              className="flex items-center gap-1.5 text-[11px] text-cc-muted hover:text-cc-fg transition-colors cursor-pointer"
+              title="Configure panel sections"
+              data-testid="customize-panel-btn"
+            >
+              <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
+                <path fillRule="evenodd" d="M7.429 1.525a6.593 6.593 0 011.142 0c.036.003.108.036.137.146l.289 1.105c.147.56.55.967.997 1.189.174.086.341.183.501.29.417.278.97.423 1.53.27l1.102-.303c.11-.03.175.016.195.046.219.31.41.641.573.989.014.031.022.11-.059.19l-.815.806c-.411.406-.562.957-.53 1.456a4.588 4.588 0 010 .582c-.032.499.119 1.05.53 1.456l.815.806c.08.08.073.159.059.19a6.494 6.494 0 01-.573.99c-.02.029-.086.074-.195.045l-1.103-.303c-.559-.153-1.112-.008-1.529.27-.16.107-.327.204-.5.29-.449.222-.851.628-.998 1.189l-.289 1.105c-.029.11-.101.143-.137.146a6.613 6.613 0 01-1.142 0c-.036-.003-.108-.037-.137-.146l-.289-1.105c-.147-.56-.55-.967-.997-1.189a4.502 4.502 0 01-.501-.29c-.417-.278-.97-.423-1.53-.27l-1.102.303c-.11.03-.175-.016-.195-.046a6.492 6.492 0 01-.573-.989c-.014-.031-.022-.11.059-.19l.815-.806c.411-.406.562-.957.53-1.456a4.587 4.587 0 010-.582c.032-.499-.119-1.05-.53-1.456l-.815-.806c-.08-.08-.073-.159-.059-.19a6.44 6.44 0 01.573-.99c.02-.029.086-.074.195-.045l1.103.303c.559.153 1.112.008 1.529-.27.16-.107.327-.204.5-.29.449-.222.851-.628.998-1.189l.289-1.105c.029-.11.101-.143.137-.146zM8 10.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5z" clipRule="evenodd" />
+              </svg>
+              Customize panel
+            </button>
+          </div>
+        </>
+      )}
     </aside>
   );
 }

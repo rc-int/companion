@@ -1,6 +1,16 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useStore } from "../store.js";
-import { api, createSessionStream, type CompanionEnv, type GitRepoInfo, type GitBranchInfo, type BackendInfo, type ImagePullState } from "../api.js";
+import {
+  api,
+  createSessionStream,
+  type ClaudeDiscoveredSession,
+  type CompanionEnv,
+  type GitRepoInfo,
+  type GitBranchInfo,
+  type BackendInfo,
+  type ImagePullState,
+  type LinearIssue,
+} from "../api.js";
 import { connectSession, waitForConnection, sendToSession } from "../ws.js";
 import { disconnectSession } from "../ws.js";
 import { generateUniqueSessionName } from "../utils/names.js";
@@ -10,27 +20,73 @@ import { getModelsForBackend, getModesForBackend, getDefaultModel, getDefaultMod
 import type { BackendType } from "../types.js";
 import { EnvManager } from "./EnvManager.js";
 import { FolderPicker } from "./FolderPicker.js";
-
-interface ImageAttachment {
-  name: string;
-  base64: string;
-  mediaType: string;
-}
-
-function readFileAsBase64(file: File): Promise<{ base64: string; mediaType: string }> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result as string;
-      const base64 = dataUrl.split(",")[1];
-      resolve({ base64, mediaType: file.type });
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-}
+import { readFileAsBase64, type ImageAttachment } from "../utils/image.js";
+import { LinearSection } from "./home/LinearSection.js";
+import { BranchPicker } from "./home/BranchPicker.js";
+import type { SdkSessionInfo } from "../types.js";
 
 let idCounter = 0;
+
+type ResumeCandidate = {
+  resumeSessionId: string;
+  sessionId: string;
+  name?: string;
+  slug?: string;
+  model?: string;
+  createdAt: number;
+  cwd: string;
+  gitBranch?: string;
+  source: "companion" | "claude_disk";
+};
+
+type SessionLaunchOverride = {
+  resumeSessionAt: string;
+  forkSession: boolean;
+  cwd?: string;
+  branch?: string;
+  useWorktree?: boolean;
+  createBranch?: boolean;
+};
+
+const RECENT_SESSIONS_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+const INITIAL_VISIBLE_SESSION_ROWS = 12;
+const LOAD_MORE_SESSION_ROWS = 24;
+
+function getResumeCandidateProject(cwd: string): string {
+  return cwd.split("/").filter(Boolean).pop() || cwd;
+}
+
+function getResumeCandidateTitle(candidate: ResumeCandidate): string {
+  return candidate.name?.trim()
+    || candidate.slug?.trim()
+    || getResumeCandidateProject(candidate.cwd);
+}
+
+function shortSessionId(sessionId: string): string {
+  return sessionId.length > 8 ? sessionId.slice(0, 8) : sessionId;
+}
+
+function formatPathTail(path: string, segments = 2): string {
+  const parts = path.split("/").filter(Boolean);
+  if (parts.length <= segments) return path;
+  return `.../${parts.slice(-segments).join("/")}`;
+}
+
+function formatTimeAgo(timestamp: number): string {
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return "Unknown";
+  const deltaMs = Date.now() - timestamp;
+  if (deltaMs < 60_000) return "Just now";
+  const minutes = Math.floor(deltaMs / 60_000);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `${days}d ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 8) return `${weeks}w ago`;
+  const months = Math.floor(days / 30);
+  return `${Math.max(1, months)}mo ago`;
+}
 
 export function HomePage() {
   const [text, setText] = useState("");
@@ -49,9 +105,8 @@ export function HomePage() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [dynamicModels, setDynamicModels] = useState<ModelOption[] | null>(null);
-  const [codexInternetAccess, setCodexInternetAccess] = useState(() =>
-    localStorage.getItem("cc-codex-internet-access") === "1",
-  );
+  const [linearConfigured, setLinearConfigured] = useState(false);
+  const [selectedLinearIssue, setSelectedLinearIssue] = useState<LinearIssue | null>(null);
 
   const MODELS = dynamicModels || getModelsForBackend(backend);
   const MODES = getModesForBackend(backend);
@@ -72,15 +127,22 @@ export function HomePage() {
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [showModeDropdown, setShowModeDropdown] = useState(false);
   const [showFolderPicker, setShowFolderPicker] = useState(false);
+  const [showBranchingControls, setShowBranchingControls] = useState(false);
+  const [resumeSessionAt, setResumeSessionAt] = useState("");
+  const [forkSession, setForkSession] = useState(true);
+  const [resumeCandidates, setResumeCandidates] = useState<ResumeCandidate[]>([]);
+  const [resumeCandidatesLoading, setResumeCandidatesLoading] = useState(false);
+  const [resumeCandidatesError, setResumeCandidatesError] = useState("");
+  const [showOlderResumeCandidates, setShowOlderResumeCandidates] = useState(false);
+  const [visibleResumeCandidateRows, setVisibleResumeCandidateRows] = useState(INITIAL_VISIBLE_SESSION_ROWS);
+  const [resumeSearchQuery, setResumeSearchQuery] = useState("");
 
-  // Git branch state
+  // Git branch state (owned here, driven by BranchPicker + LinearSection)
   const [gitRepoInfo, setGitRepoInfo] = useState<GitRepoInfo | null>(null);
   const [useWorktree, setUseWorktree] = useState(false);
   const [selectedBranch, setSelectedBranch] = useState("");
-  const [branches, setBranches] = useState<GitBranchInfo[]>([]);
-  const [showBranchDropdown, setShowBranchDropdown] = useState(false);
-  const [branchFilter, setBranchFilter] = useState("");
   const [isNewBranch, setIsNewBranch] = useState(false);
+  const [branches, setBranches] = useState<GitBranchInfo[]>([]);
 
   // Branch freshness check state
   const [pullPrompt, setPullPrompt] = useState<{ behind: number; branchName: string } | null>(null);
@@ -91,9 +153,7 @@ export function HomePage() {
   const modelDropdownRef = useRef<HTMLDivElement>(null);
   const modeDropdownRef = useRef<HTMLDivElement>(null);
   const envDropdownRef = useRef<HTMLDivElement>(null);
-  const branchDropdownRef = useRef<HTMLDivElement>(null);
 
-  const setCurrentSession = useStore((s) => s.setCurrentSession);
   const currentSessionId = useStore((s) => s.currentSessionId);
 
   // Auto-focus textarea (desktop only — on mobile it triggers the keyboard immediately)
@@ -113,6 +173,9 @@ export function HomePage() {
     }).catch(() => {});
     api.listEnvs().then(setEnvs).catch(() => {});
     api.getBackends().then(setBackends).catch(() => {});
+    api.getSettings().then((s) => {
+      setLinearConfigured(s.linearApiKeyConfigured);
+    }).catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // When backend changes, reset model and mode to defaults
@@ -122,6 +185,15 @@ export function HomePage() {
     setDynamicModels(null);
     setModel(getDefaultModel(newBackend));
     setMode(getDefaultMode(newBackend));
+    if (newBackend !== "claude") {
+      setShowBranchingControls(false);
+      setResumeCandidates([]);
+      setResumeCandidatesError("");
+      setResumeCandidatesLoading(false);
+      setShowOlderResumeCandidates(false);
+      setVisibleResumeCandidateRows(INITIAL_VISIBLE_SESSION_ROWS);
+      setResumeSearchQuery("");
+    }
   }
 
   // Fetch dynamic models for the selected backend
@@ -201,9 +273,6 @@ export function HomePage() {
       if (envDropdownRef.current && !envDropdownRef.current.contains(e.target as Node)) {
         setShowEnvDropdown(false);
       }
-      if (branchDropdownRef.current && !branchDropdownRef.current.contains(e.target as Node)) {
-        setShowBranchDropdown(false);
-      }
     }
     document.addEventListener("pointerdown", handleClick);
     return () => document.removeEventListener("pointerdown", handleClick);
@@ -219,24 +288,128 @@ export function HomePage() {
       setGitRepoInfo(info);
       setSelectedBranch(info.currentBranch);
       setIsNewBranch(false);
-      api.listBranches(info.repoRoot).then(setBranches).catch(() => setBranches([]));
     }).catch(() => {
       setGitRepoInfo(null);
     });
   }, [cwd]);
 
-  // Fetch branches when git repo changes
-  useEffect(() => {
-    if (gitRepoInfo) {
-      api.listBranches(gitRepoInfo.repoRoot).then(setBranches).catch(() => setBranches([]));
-    }
-  }, [gitRepoInfo]);
-
-
   const selectedModel = MODELS.find((m) => m.value === model) || MODELS[0];
   const selectedMode = MODES.find((m) => m.value === mode) || MODES[0];
   const logoSrc = backend === "codex" ? "/logo-codex.svg" : "/logo.svg";
   const dirLabel = cwd ? cwd.split("/").pop() || cwd : "Select folder";
+  const trimmedResumeSessionAt = useMemo(() => resumeSessionAt.trim(), [resumeSessionAt]);
+  const branchFromSessionEnabled = backend === "claude"
+    && showBranchingControls
+    && trimmedResumeSessionAt.length > 0;
+  const recentResumeCandidates = useMemo(() => {
+    const cutoff = Date.now() - RECENT_SESSIONS_WINDOW_MS;
+    return resumeCandidates.filter((candidate) => candidate.createdAt >= cutoff);
+  }, [resumeCandidates]);
+  const activeResumeCandidates = useMemo(() => {
+    if (showOlderResumeCandidates) return resumeCandidates;
+    return recentResumeCandidates.length > 0 ? recentResumeCandidates : resumeCandidates;
+  }, [showOlderResumeCandidates, recentResumeCandidates, resumeCandidates]);
+  const normalizedResumeSearchQuery = useMemo(
+    () => resumeSearchQuery.trim().toLowerCase(),
+    [resumeSearchQuery],
+  );
+  const filteredActiveResumeCandidates = useMemo(() => {
+    if (!normalizedResumeSearchQuery) return activeResumeCandidates;
+    return activeResumeCandidates.filter((candidate) => {
+      const title = getResumeCandidateTitle(candidate).toLowerCase();
+      const project = getResumeCandidateProject(candidate.cwd).toLowerCase();
+      const branch = (candidate.gitBranch || "").toLowerCase();
+      const cwdText = candidate.cwd.toLowerCase();
+      const sessionId = candidate.resumeSessionId.toLowerCase();
+      return title.includes(normalizedResumeSearchQuery)
+        || project.includes(normalizedResumeSearchQuery)
+        || branch.includes(normalizedResumeSearchQuery)
+        || cwdText.includes(normalizedResumeSearchQuery)
+        || sessionId.includes(normalizedResumeSearchQuery);
+    });
+  }, [activeResumeCandidates, normalizedResumeSearchQuery]);
+  const visibleResumeCandidates = useMemo(
+    () => filteredActiveResumeCandidates.slice(0, visibleResumeCandidateRows),
+    [filteredActiveResumeCandidates, visibleResumeCandidateRows],
+  );
+  const hasMoreResumeCandidates = visibleResumeCandidateRows < filteredActiveResumeCandidates.length;
+  const hiddenOlderResumeCount = Math.max(0, resumeCandidates.length - recentResumeCandidates.length);
+  const showingRecentOnly = !showOlderResumeCandidates && recentResumeCandidates.length > 0;
+
+  const loadResumeCandidates = useCallback(async () => {
+    if (backend !== "claude") return;
+    setResumeCandidatesLoading(true);
+    setResumeCandidatesError("");
+    try {
+      const [companionSessions, discovered] = await Promise.all([
+        api.listSessions(),
+        api.discoverClaudeSessions(400).then((result) => result.sessions),
+      ]);
+
+      const uniqueByResumeSession = new Map<string, ResumeCandidate>();
+      const upsertCandidate = (candidate: ResumeCandidate) => {
+        const prev = uniqueByResumeSession.get(candidate.resumeSessionId);
+        if (!prev || candidate.createdAt > prev.createdAt) {
+          uniqueByResumeSession.set(candidate.resumeSessionId, candidate);
+        }
+      };
+
+      for (const session of companionSessions as SdkSessionInfo[]) {
+        if (session.backendType === "codex") continue;
+        if (!session.cliSessionId) continue;
+        upsertCandidate({
+          resumeSessionId: session.cliSessionId,
+          sessionId: session.sessionId,
+          name: session.name,
+          model: session.model,
+          createdAt: session.createdAt,
+          cwd: session.cwd,
+          gitBranch: session.gitBranch,
+          source: "companion",
+        });
+      }
+
+      for (const diskSession of discovered as ClaudeDiscoveredSession[]) {
+        upsertCandidate({
+          resumeSessionId: diskSession.sessionId,
+          sessionId: diskSession.sessionId,
+          slug: diskSession.slug,
+          createdAt: diskSession.lastActivityAt,
+          cwd: diskSession.cwd,
+          gitBranch: diskSession.gitBranch,
+          source: "claude_disk",
+        });
+      }
+
+      const next = Array.from(uniqueByResumeSession.values())
+        .sort((a, b) => {
+          const aCwdMatch = cwd && a.cwd === cwd ? 0 : 1;
+          const bCwdMatch = cwd && b.cwd === cwd ? 0 : 1;
+          if (aCwdMatch !== bCwdMatch) return aCwdMatch - bCwdMatch;
+          return b.createdAt - a.createdAt;
+        });
+      setResumeCandidates(next);
+      setShowOlderResumeCandidates(false);
+      setVisibleResumeCandidateRows(INITIAL_VISIBLE_SESSION_ROWS);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setResumeCandidatesError(msg || "Failed to load existing sessions");
+      setResumeCandidates([]);
+      setVisibleResumeCandidateRows(INITIAL_VISIBLE_SESSION_ROWS);
+    } finally {
+      setResumeCandidatesLoading(false);
+    }
+  }, [backend, cwd]);
+
+  useEffect(() => {
+    if (backend === "claude" && showBranchingControls) {
+      void loadResumeCandidates();
+    }
+  }, [backend, showBranchingControls, loadResumeCandidates]);
+
+  useEffect(() => {
+    setVisibleResumeCandidateRows(INITIAL_VISIBLE_SESSION_ROWS);
+  }, [normalizedResumeSearchQuery, showOlderResumeCandidates]);
 
   async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const files = e.target.files;
@@ -294,6 +467,25 @@ export function HomePage() {
     }
   }
 
+  function buildInitialMessage(msg: string): string {
+    if (!selectedLinearIssue) return msg;
+    const description = selectedLinearIssue.description?.trim();
+    const safeDescription = description
+      ? (description.length > 1600 ? `${description.slice(0, 1600)}...` : description)
+      : "";
+    const context = [
+      "Linear issue context:",
+      `- Identifier: ${selectedLinearIssue.identifier}`,
+      `- Title: ${selectedLinearIssue.title}`,
+      selectedLinearIssue.stateName ? `- State: ${selectedLinearIssue.stateName}` : "",
+      selectedLinearIssue.priorityLabel ? `- Priority: ${selectedLinearIssue.priorityLabel}` : "",
+      selectedLinearIssue.teamName ? `- Team: ${selectedLinearIssue.teamName}` : "",
+      `- URL: ${selectedLinearIssue.url}`,
+      safeDescription ? `- Description: ${safeDescription}` : "",
+    ].filter(Boolean).join("\n");
+    return `${context}\n\nUser request:\n${msg}`;
+  }
+
   async function handleSend() {
     const msg = text.trim();
     if (!msg || sending) return;
@@ -319,12 +511,10 @@ export function HomePage() {
     await doCreateSession(msg);
   }
 
-  async function doCreateSession(msg: string) {
-    if (!msg) {
-      setSending(false);
-      return;
-    }
-
+  async function doCreateSession(
+    msg: string,
+    launchOverride?: SessionLaunchOverride,
+  ) {
     const store = useStore.getState();
     store.clearCreation();
     store.setSessionCreating(true, backend as "claude" | "codex");
@@ -335,19 +525,36 @@ export function HomePage() {
         disconnectSession(currentSessionId);
       }
 
+      const effectiveResumeSessionAt = launchOverride?.resumeSessionAt
+        || (branchFromSessionEnabled ? trimmedResumeSessionAt : undefined);
+      const effectiveForkSession = effectiveResumeSessionAt
+        ? (launchOverride?.forkSession ?? (branchFromSessionEnabled ? forkSession : undefined))
+        : undefined;
+      const effectiveCwd = launchOverride?.cwd || cwd;
+      const effectiveBranch = launchOverride?.branch !== undefined
+        ? (launchOverride.branch.trim() || undefined)
+        : (selectedBranch.trim() || undefined);
+      const effectiveUseWorktree = launchOverride?.useWorktree !== undefined
+        ? launchOverride.useWorktree
+        : useWorktree;
+      const effectiveCreateBranch = launchOverride?.createBranch !== undefined
+        ? launchOverride.createBranch
+        : Boolean(effectiveBranch && isNewBranch);
+
       // Create session with progress streaming
-      const branchName = selectedBranch.trim() || undefined;
       const result = await createSessionStream(
         {
           model,
           permissionMode: mode,
-          cwd: cwd || undefined,
+          cwd: effectiveCwd || undefined,
           envSlug: selectedEnv || undefined,
-          branch: branchName,
-          createBranch: branchName && isNewBranch ? true : undefined,
-          useWorktree: useWorktree || undefined,
+          branch: effectiveBranch,
+          createBranch: effectiveCreateBranch ? true : undefined,
+          useWorktree: effectiveUseWorktree ? true : undefined,
           backend,
-          codexInternetAccess: backend === "codex" ? codexInternetAccess : undefined,
+          codexInternetAccess: backend === "codex" ? true : undefined,
+          resumeSessionAt: effectiveResumeSessionAt,
+          forkSession: effectiveForkSession,
         },
         (progress) => {
           useStore.getState().addCreationProgress(progress);
@@ -355,13 +562,32 @@ export function HomePage() {
       );
       const sessionId = result.sessionId;
 
+      // Seed sdk session metadata immediately so chat can render resume/fork context
+      // before the sidebar poller refreshes /api/sessions.
+      const sessionStore = useStore.getState();
+      const existingSdkSessions = sessionStore.sdkSessions.filter((sdk) => sdk.sessionId !== sessionId);
+      sessionStore.setSdkSessions([
+        ...existingSdkSessions,
+        {
+          sessionId,
+          state: result.state as "starting" | "connected" | "running" | "exited",
+          cwd: result.cwd,
+          createdAt: Date.now(),
+          backendType: (result.backendType as BackendType | undefined) || backend,
+          model,
+          permissionMode: mode,
+          resumeSessionAt: effectiveResumeSessionAt,
+          forkSession: effectiveResumeSessionAt ? effectiveForkSession === true : undefined,
+        },
+      ]);
+
       // Assign a random session name
       const existingNames = new Set(useStore.getState().sessionNames.values());
       const sessionName = generateUniqueSessionName(existingNames);
       useStore.getState().setSessionName(sessionId, sessionName);
 
       // Save cwd to recent dirs
-      if (cwd) addRecentDir(cwd);
+      if (effectiveCwd) addRecentDir(effectiveCwd);
 
       // Store the permission mode for this session
       useStore.getState().setPreviousPermissionMode(sessionId, mode);
@@ -375,22 +601,38 @@ export function HomePage() {
       // Wait for WebSocket connection
       await waitForConnection(sessionId);
 
-      // Send message
-      sendToSession(sessionId, {
-        type: "user_message",
-        content: msg,
-        session_id: sessionId,
-        images: images.length > 0 ? images.map((img) => ({ media_type: img.mediaType, data: img.base64 })) : undefined,
-      });
+      const trimmedMsg = msg.trim();
+      if (trimmedMsg.length > 0) {
+        const initialMessage = buildInitialMessage(trimmedMsg);
 
-      // Add user message to store
-      useStore.getState().appendMessage(sessionId, {
-        id: `user-${Date.now()}-${++idCounter}`,
-        role: "user",
-        content: msg,
-        images: images.length > 0 ? images.map((img) => ({ media_type: img.mediaType, data: img.base64 })) : undefined,
-        timestamp: Date.now(),
-      });
+        // Send message
+        sendToSession(sessionId, {
+          type: "user_message",
+          content: initialMessage,
+          session_id: sessionId,
+          images: images.length > 0 ? images.map((img) => ({ media_type: img.mediaType, data: img.base64 })) : undefined,
+        });
+
+        // Add user message to store
+        useStore.getState().appendMessage(sessionId, {
+          id: `user-${Date.now()}-${++idCounter}`,
+          role: "user",
+          content: initialMessage,
+          images: images.length > 0 ? images.map((img) => ({ media_type: img.mediaType, data: img.base64 })) : undefined,
+          timestamp: Date.now(),
+        });
+      }
+
+      // Auto-link Linear issue if one was selected
+      if (selectedLinearIssue) {
+        api.linkLinearIssue(sessionId, selectedLinearIssue)
+          .then(() => useStore.getState().setLinkedLinearIssue(sessionId, selectedLinearIssue))
+          .catch(() => { /* fire-and-forget: linking is best-effort */ });
+        // Fire-and-forget: transition Linear issue to configured status
+        api.transitionLinearIssue(selectedLinearIssue.id).catch(() => {
+          /* fire-and-forget: status transition is best-effort */
+        });
+      }
 
       // Clear progress on success
       useStore.getState().clearCreation();
@@ -402,6 +644,27 @@ export function HomePage() {
       useStore.getState().setCreationError(errMsg);
       setSending(false);
     }
+  }
+
+  async function handleOpenBranchedSession(candidate: ResumeCandidate, shouldFork: boolean) {
+    if (sending) return;
+    setSending(true);
+    setError("");
+    setPullError("");
+    setCwd(candidate.cwd);
+    setUseWorktree(false);
+    setIsNewBranch(false);
+    setSelectedBranch(candidate.gitBranch || "");
+    setResumeSessionAt(candidate.resumeSessionId);
+    setForkSession(shouldFork);
+    await doCreateSession("", {
+      resumeSessionAt: candidate.resumeSessionId,
+      forkSession: shouldFork,
+      cwd: candidate.cwd,
+      branch: candidate.gitBranch,
+      useWorktree: false,
+      createBranch: false,
+    });
   }
 
   async function handlePullAndContinue() {
@@ -419,11 +682,6 @@ export function HomePage() {
         setPulling(false);
         setSending(false);
         return;
-      }
-
-      // Refresh branch data after successful pull
-      if (gitRepoInfo) {
-        api.listBranches(gitRepoInfo.repoRoot).then(setBranches).catch(() => {});
       }
 
       setPullPrompt(null);
@@ -448,15 +706,38 @@ export function HomePage() {
     setSending(false);
   }
 
+  const handleBranchChange = useCallback((branch: string, isNew: boolean) => {
+    setSelectedBranch(branch);
+    setIsNewBranch(isNew);
+  }, []);
+
+  const handleBranchFromIssue = useCallback((branch: string, isNew: boolean) => {
+    setSelectedBranch(branch);
+    setIsNewBranch(isNew);
+  }, []);
+
+  const handleBranchesLoaded = useCallback((loadedBranches: GitBranchInfo[]) => {
+    setBranches(loadedBranches);
+  }, []);
+
+  const handleIssueSelect = useCallback((issue: LinearIssue | null) => {
+    setSelectedLinearIssue(issue);
+    if (!issue && gitRepoInfo) {
+      // Revert branch to current when clearing Linear issue
+      setSelectedBranch(gitRepoInfo.currentBranch);
+      setIsNewBranch(false);
+    }
+  }, [gitRepoInfo]);
+
   const canSend = text.trim().length > 0 && !sending;
 
   return (
-    <div className="flex-1 h-full flex items-start justify-center px-3 sm:px-4 pt-[15vh] sm:pt-[20vh] overflow-y-auto">
+    <div className="flex-1 h-full flex items-start justify-center px-3 sm:px-4 pt-6 sm:pt-8 pb-6 overflow-y-auto">
       <div className="w-full max-w-2xl">
         {/* Logo + Title */}
-        <div className="flex flex-col items-center justify-center mb-4 sm:mb-6">
-          <img src={logoSrc} alt="The Companion" className="w-24 h-24 sm:w-32 sm:h-32 mb-3" />
-          <h1 className="text-xl sm:text-2xl font-semibold text-cc-fg">
+        <div className="flex flex-col items-center justify-center mb-3 sm:mb-4">
+          <img src={logoSrc} alt="The Companion" className="w-16 h-16 sm:w-20 sm:h-20 mb-2.5" />
+          <h1 className="text-2xl sm:text-[2rem] font-semibold tracking-tight text-cc-fg">
             The Companion
           </h1>
         </div>
@@ -492,91 +773,113 @@ export function HomePage() {
           multiple
           onChange={handleFileSelect}
           className="hidden"
+          aria-label="Attach images"
         />
 
-        {/* Input card */}
-        <div className="bg-cc-card border border-cc-border rounded-[14px] shadow-sm overflow-hidden">
-          <textarea
-            ref={textareaRef}
-            value={text}
-            onChange={handleInput}
-            onKeyDown={handleKeyDown}
-            onPaste={handlePaste}
-            placeholder="Fix a bug, build a feature, refactor code..."
-            rows={4}
-            className="w-full px-4 pt-4 pb-2 text-base sm:text-sm bg-transparent resize-none focus:outline-none text-cc-fg font-sans-ui placeholder:text-cc-muted overflow-y-auto"
-            style={{ minHeight: "100px", maxHeight: "200px" }}
-          />
-
-          {/* Bottom toolbar */}
-          <div className="flex items-center justify-between px-3 pb-3">
-            {/* Left: mode dropdown */}
-            <div className="relative" ref={modeDropdownRef}>
-              <button
-                onClick={() => setShowModeDropdown(!showModeDropdown)}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-cc-muted hover:text-cc-fg rounded-lg hover:bg-cc-hover transition-colors cursor-pointer"
-              >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3.5 h-3.5">
-                  <path d="M2 4h12M2 8h8M2 12h10" strokeLinecap="round" />
-                </svg>
-                {selectedMode.label}
-                <svg viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3 opacity-50">
-                  <path d="M4 6l4 4 4-4" />
-                </svg>
-              </button>
-              {showModeDropdown && (
-                <div className="absolute left-0 bottom-full mb-1 w-40 bg-cc-card border border-cc-border rounded-[10px] shadow-lg z-10 py-1 overflow-hidden">
-                  {MODES.map((m) => (
+        <div className="grid grid-cols-1 gap-3 sm:gap-4 items-start">
+          <div>
+            {/* Input card */}
+            <div className="bg-cc-card border border-cc-border rounded-[14px] shadow-sm overflow-hidden">
+              {selectedLinearIssue && (
+                <div className="px-3 pt-3">
+                  <div className="inline-flex max-w-full items-center gap-2 rounded-md border border-cc-border bg-cc-hover/60 px-2.5 py-1.5 text-[11px] text-cc-muted">
+                    <span className="shrink-0">Linear</span>
+                    <span className="font-mono-code shrink-0">{selectedLinearIssue.identifier}</span>
+                    <span className="truncate">{selectedLinearIssue.title}</span>
                     <button
-                      key={m.value}
-                      onClick={() => { setMode(m.value); setShowModeDropdown(false); }}
-                      className={`w-full px-3 py-2 text-xs text-left hover:bg-cc-hover transition-colors cursor-pointer ${
-                        m.value === mode ? "text-cc-primary font-medium" : "text-cc-fg"
-                      }`}
+                      type="button"
+                      onClick={() => handleIssueSelect(null)}
+                      className="shrink-0 rounded px-1 text-cc-muted hover:text-cc-fg hover:bg-cc-active transition-colors cursor-pointer"
+                      title="Remove Linear issue"
                     >
-                      {m.label}
+                      ×
                     </button>
-                  ))}
+                  </div>
                 </div>
               )}
+              <textarea
+                ref={textareaRef}
+                value={text}
+                onChange={handleInput}
+                onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
+                aria-label="Task description"
+              placeholder="Fix a bug, build a feature, refactor code..."
+                rows={4}
+                className="w-full px-4 pt-4 pb-2 text-base sm:text-sm bg-transparent resize-none focus:outline-none text-cc-fg font-sans-ui placeholder:text-cc-muted overflow-y-auto"
+                style={{ minHeight: "100px", maxHeight: "200px" }}
+              />
+
+              {/* Bottom toolbar */}
+              <div className="flex items-center justify-between px-3 pb-3">
+                {/* Left: mode dropdown */}
+                <div className="relative" ref={modeDropdownRef}>
+                  <button
+                    onClick={() => setShowModeDropdown(!showModeDropdown)}
+                    aria-expanded={showModeDropdown}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-cc-muted hover:text-cc-fg rounded-lg hover:bg-cc-hover transition-colors cursor-pointer"
+                  >
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3.5 h-3.5">
+                      <path d="M2 4h12M2 8h8M2 12h10" strokeLinecap="round" />
+                    </svg>
+                    {selectedMode.label}
+                    <svg viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3 opacity-50">
+                      <path d="M4 6l4 4 4-4" />
+                    </svg>
+                  </button>
+                  {showModeDropdown && (
+                    <div className="absolute left-0 bottom-full mb-1 w-40 bg-cc-card border border-cc-border rounded-[10px] shadow-lg z-10 py-1 overflow-hidden">
+                      {MODES.map((m) => (
+                        <button
+                          key={m.value}
+                          onClick={() => { setMode(m.value); setShowModeDropdown(false); }}
+                          className={`w-full px-3 py-2 text-xs text-left hover:bg-cc-hover transition-colors cursor-pointer ${
+                            m.value === mode ? "text-cc-primary font-medium" : "text-cc-fg"
+                          }`}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Right: image placeholder + send */}
+                <div className="flex items-center gap-1.5">
+                  {/* Image upload */}
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex items-center justify-center w-8 h-8 rounded-lg text-cc-muted hover:text-cc-fg hover:bg-cc-hover transition-colors cursor-pointer"
+                    title="Upload image"
+                  >
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-4 h-4">
+                      <rect x="2" y="2" width="12" height="12" rx="2" />
+                      <circle cx="5.5" cy="5.5" r="1" fill="currentColor" stroke="none" />
+                      <path d="M2 11l3-3 2 2 3-4 4 5" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+
+                  {/* Send button */}
+                  <button
+                    onClick={handleSend}
+                    disabled={!canSend}
+                    className={`flex items-center justify-center w-8 h-8 rounded-full transition-colors ${
+                      canSend
+                        ? "bg-cc-primary hover:bg-cc-primary-hover text-white cursor-pointer"
+                        : "bg-cc-hover text-cc-muted cursor-not-allowed"
+                    }`}
+                    title="Send message"
+                  >
+                    <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
+                      <path d="M3 2l11 6-11 6V9.5l7-1.5-7-1.5V2z" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
             </div>
 
-            {/* Right: image placeholder + send */}
-            <div className="flex items-center gap-1.5">
-              {/* Image upload */}
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="flex items-center justify-center w-8 h-8 rounded-lg text-cc-muted hover:text-cc-fg hover:bg-cc-hover transition-colors cursor-pointer"
-                title="Upload image"
-              >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-4 h-4">
-                  <rect x="2" y="2" width="12" height="12" rx="2" />
-                  <circle cx="5.5" cy="5.5" r="1" fill="currentColor" stroke="none" />
-                  <path d="M2 11l3-3 2 2 3-4 4 5" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
-
-              {/* Send button */}
-              <button
-                onClick={handleSend}
-                disabled={!canSend}
-                className={`flex items-center justify-center w-8 h-8 rounded-full transition-colors ${
-                  canSend
-                    ? "bg-cc-primary hover:bg-cc-primary-hover text-white cursor-pointer"
-                    : "bg-cc-hover text-cc-muted cursor-not-allowed"
-                }`}
-                title="Send message"
-              >
-                <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5">
-                  <path d="M3 2l11 6-11 6V9.5l7-1.5-7-1.5V2z" />
-                </svg>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Below-card selectors */}
-        <div className="flex items-center gap-1 sm:gap-2 mt-2 sm:mt-3 px-1 flex-wrap">
+            {/* Below-card selectors */}
+          <div className="flex items-center gap-1 sm:gap-2 mt-2 sm:mt-3 px-1 flex-wrap">
           {/* Backend toggle */}
           {backends.length > 1 && (
             <div className="flex items-center bg-cc-hover/50 rounded-lg p-0.5">
@@ -606,28 +909,6 @@ export function HomePage() {
             </div>
           )}
 
-          {/* Codex internet access toggle */}
-          {backend === "codex" && (
-            <button
-              onClick={() => {
-                const next = !codexInternetAccess;
-                setCodexInternetAccess(next);
-                localStorage.setItem("cc-codex-internet-access", next ? "1" : "0");
-              }}
-              className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors cursor-pointer ${
-                codexInternetAccess
-                  ? "bg-cc-primary/15 text-cc-primary font-medium"
-                  : "text-cc-muted hover:text-cc-fg hover:bg-cc-hover"
-              }`}
-              title="Allow Codex internet/network access for this session"
-            >
-              <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5 opacity-70">
-                <path d="M8 2a6 6 0 100 12A6 6 0 008 2zm0 1.5c.8 0 1.55.22 2.2.61-.39.54-.72 1.21-.95 1.98H6.75c-.23-.77-.56-1.44-.95-1.98A4.47 4.47 0 018 3.5zm-3.2 1.3c.3.4.57.86.78 1.37H3.83c.24-.53.57-1.01.97-1.37zm-.97 2.87h2.15c.07.44.12.9.12 1.38 0 .48-.05.94-.12 1.38H3.83A4.56 4.56 0 013.5 9c0-.47.12-.92.33-1.33zm2.03 4.08c.39-.54.72-1.21.95-1.98h2.38c.23.77.56 1.44.95 1.98A4.47 4.47 0 018 12.5c-.8 0-1.55-.22-2.2-.61zm4.34-1.37c.07-.44.12-.9.12-1.38 0-.48-.05-.94-.12-1.38h2.15c.21.41.33.86.33 1.33 0 .47-.12.92-.33 1.33H10.2zm1.37-3.58h-1.75c-.21-.51-.48-.97-.78-1.37.4.36.73.84.97 1.37z" />
-              </svg>
-              <span>Internet</span>
-            </button>
-          )}
-
           {/* Folder selector */}
           <div>
             <button
@@ -651,167 +932,17 @@ export function HomePage() {
             )}
           </div>
 
-          {/* Branch picker (always visible when cwd is a git repo) */}
-          {gitRepoInfo && (
-            <div className="relative" ref={branchDropdownRef}>
-              <button
-                onClick={() => {
-                  if (!showBranchDropdown && gitRepoInfo) {
-                    api.gitFetch(gitRepoInfo.repoRoot)
-                      .catch(() => {})
-                      .finally(() => {
-                        api.listBranches(gitRepoInfo.repoRoot).then(setBranches).catch(() => setBranches([]));
-                      });
-                  }
-                  setShowBranchDropdown(!showBranchDropdown);
-                  setBranchFilter("");
-                }}
-                className="flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors cursor-pointer text-cc-muted hover:text-cc-fg hover:bg-cc-hover"
-              >
-                <svg viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3 opacity-60">
-                  <path d="M5 3.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zm0 2.122a2.25 2.25 0 10-1.5 0v.378A2.5 2.5 0 007.5 8h1a1 1 0 010 2h-1A2.5 2.5 0 005 12.5v.128a2.25 2.25 0 101.5 0V12.5a1 1 0 011-1h1a2.5 2.5 0 000-5h-1a1 1 0 01-1-1V5.372zM4.25 12a.75.75 0 100 1.5.75.75 0 000-1.5z" />
-                </svg>
-                <span className="max-w-[100px] sm:max-w-[160px] truncate font-mono-code">
-                  {selectedBranch || gitRepoInfo.currentBranch}
-                </span>
-                <svg viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3 opacity-50">
-                  <path d="M4 6l4 4 4-4" />
-                </svg>
-              </button>
-              {showBranchDropdown && (
-                <div className="absolute left-0 bottom-full mb-1 w-72 max-w-[calc(100vw-2rem)] bg-cc-card border border-cc-border rounded-[10px] shadow-lg z-10 overflow-hidden">
-                  {/* Search/filter input */}
-                  <div className="px-2 py-2 border-b border-cc-border">
-                    <input
-                      type="text"
-                      value={branchFilter}
-                      onChange={(e) => setBranchFilter(e.target.value)}
-                      placeholder="Filter or create branch..."
-                      className="w-full px-2 py-1 text-base sm:text-xs bg-cc-input-bg border border-cc-border rounded-md text-cc-fg font-mono-code placeholder:text-cc-muted focus:outline-none focus:border-cc-primary/50"
-                      autoFocus
-                      onKeyDown={(e) => {
-                        if (e.key === "Escape") {
-                          setShowBranchDropdown(false);
-                        }
-                      }}
-                    />
-                  </div>
-                  {/* Branch list */}
-                  <div className="max-h-[240px] overflow-y-auto py-1">
-                    {(() => {
-                      const filter = branchFilter.toLowerCase().trim();
-                      const localBranches = branches.filter((b) => !b.isRemote && (!filter || b.name.toLowerCase().includes(filter)));
-                      const remoteBranches = branches.filter((b) => b.isRemote && (!filter || b.name.toLowerCase().includes(filter)));
-                      const exactMatch = branches.some((b) => b.name.toLowerCase() === filter);
-                      const hasResults = localBranches.length > 0 || remoteBranches.length > 0;
-
-                      return (
-                        <>
-                          {/* Local branches */}
-                          {localBranches.length > 0 && (
-                            <>
-                              <div className="px-3 py-1 text-[10px] text-cc-muted uppercase tracking-wider">Local</div>
-                              {localBranches.map((b) => (
-                                <button
-                                  key={b.name}
-                                  onClick={() => {
-                                    setSelectedBranch(b.name);
-                                    setIsNewBranch(false);
-                                    setShowBranchDropdown(false);
-                                  }}
-                                  className={`w-full px-3 py-1.5 text-xs text-left hover:bg-cc-hover transition-colors cursor-pointer flex items-center gap-2 ${
-                                    b.name === selectedBranch ? "text-cc-primary font-medium" : "text-cc-fg"
-                                  }`}
-                                >
-                                  <span className="truncate font-mono-code">{b.name}</span>
-                                  <span className="ml-auto flex items-center gap-1.5 shrink-0">
-                                    {b.ahead > 0 && (
-                                      <span className="text-[9px] text-green-500">{b.ahead}&#8593;</span>
-                                    )}
-                                    {b.behind > 0 && (
-                                      <span className="text-[9px] text-amber-500">{b.behind}&#8595;</span>
-                                    )}
-                                    {b.worktreePath && (
-                                      <span className="text-[9px] px-1 py-0.5 rounded bg-blue-500/15 text-blue-600 dark:text-blue-400">wt</span>
-                                    )}
-                                    {b.isCurrent && (
-                                      <span className="text-[9px] px-1 py-0.5 rounded bg-green-500/15 text-green-600 dark:text-green-400">current</span>
-                                    )}
-                                  </span>
-                                </button>
-                              ))}
-                            </>
-                          )}
-                          {/* Remote branches */}
-                          {remoteBranches.length > 0 && (
-                            <>
-                              <div className="px-3 py-1 text-[10px] text-cc-muted uppercase tracking-wider mt-1">Remote</div>
-                              {remoteBranches.map((b) => (
-                                <button
-                                  key={`remote-${b.name}`}
-                                  onClick={() => {
-                                    setSelectedBranch(b.name);
-                                    setIsNewBranch(false);
-                                    setShowBranchDropdown(false);
-                                  }}
-                                  className={`w-full px-3 py-1.5 text-xs text-left hover:bg-cc-hover transition-colors cursor-pointer flex items-center gap-2 ${
-                                    b.name === selectedBranch ? "text-cc-primary font-medium" : "text-cc-fg"
-                                  }`}
-                                >
-                                  <span className="truncate font-mono-code">{b.name}</span>
-                                  <span className="text-[9px] px-1 py-0.5 rounded bg-cc-hover text-cc-muted ml-auto shrink-0">remote</span>
-                                </button>
-                              ))}
-                            </>
-                          )}
-                          {/* No results */}
-                          {!hasResults && filter && (
-                            <div className="px-3 py-2 text-xs text-cc-muted text-center">No matching branches</div>
-                          )}
-                          {/* Create new branch option */}
-                          {filter && !exactMatch && (
-                            <div className="border-t border-cc-border mt-1 pt-1">
-                              <button
-                                onClick={() => {
-                                  setSelectedBranch(branchFilter.trim());
-                                  setIsNewBranch(true);
-                                  setShowBranchDropdown(false);
-                                }}
-                                className="w-full px-3 py-1.5 text-xs text-left hover:bg-cc-hover transition-colors cursor-pointer flex items-center gap-2 text-cc-primary"
-                              >
-                                <svg viewBox="0 0 16 16" fill="currentColor" className="w-3 h-3 shrink-0">
-                                  <path d="M8 2a.75.75 0 01.75.75v4.5h4.5a.75.75 0 010 1.5h-4.5v4.5a.75.75 0 01-1.5 0v-4.5h-4.5a.75.75 0 010-1.5h4.5v-4.5A.75.75 0 018 2z" />
-                                </svg>
-                                <span>Create <span className="font-mono-code font-medium">{branchFilter.trim()}</span></span>
-                              </button>
-                            </div>
-                          )}
-                        </>
-                      );
-                    })()}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Worktree toggle (only when cwd is a git repo) */}
-          {gitRepoInfo && (
-            <button
-              onClick={() => setUseWorktree(!useWorktree)}
-              className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors cursor-pointer ${
-                useWorktree
-                  ? "bg-cc-primary/15 text-cc-primary font-medium"
-                  : "text-cc-muted hover:text-cc-fg hover:bg-cc-hover"
-              }`}
-              title="Create an isolated worktree for this session"
-            >
-              <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5 opacity-70">
-                <path d="M5 3.25a.75.75 0 11-1.5 0 .75.75 0 011.5 0zm0 2.122a2.25 2.25 0 10-1.5 0v5.256a2.25 2.25 0 101.5 0V5.372zM4.25 12a.75.75 0 100 1.5.75.75 0 000-1.5zm7.5-9.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122V7A2.5 2.5 0 0110 9.5H6a1 1 0 000 2h4a2.5 2.5 0 012.5 2.5v.628a2.25 2.25 0 11-1.5 0V14a1 1 0 00-1-1H6a2.5 2.5 0 01-2.5-2.5V10a2.5 2.5 0 012.5-2.5h4a1 1 0 001-1V5.372a2.25 2.25 0 01-1.5-2.122z" />
-              </svg>
-              <span>Worktree</span>
-            </button>
-          )}
+          {/* Branch picker + worktree toggle */}
+          <BranchPicker
+            cwd={cwd}
+            gitRepoInfo={gitRepoInfo}
+            selectedBranch={selectedBranch}
+            isNewBranch={isNewBranch}
+            useWorktree={useWorktree}
+            onBranchChange={handleBranchChange}
+            onWorktreeChange={setUseWorktree}
+            onBranchesLoaded={handleBranchesLoaded}
+          />
 
           {/* Environment selector */}
           <div className="relative" ref={envDropdownRef}>
@@ -822,6 +953,7 @@ export function HomePage() {
                 }
                 setShowEnvDropdown(!showEnvDropdown);
               }}
+              aria-expanded={showEnvDropdown}
               className="flex items-center gap-1.5 px-2 py-1 text-xs text-cc-muted hover:text-cc-fg rounded-md hover:bg-cc-hover transition-colors cursor-pointer"
             >
               <svg viewBox="0 0 16 16" fill="currentColor" className="w-3.5 h-3.5 opacity-60">
@@ -904,6 +1036,7 @@ export function HomePage() {
           <div className="relative" ref={modelDropdownRef}>
             <button
               onClick={() => setShowModelDropdown(!showModelDropdown)}
+              aria-expanded={showModelDropdown}
               className="flex items-center gap-1.5 px-2 py-1 text-xs text-cc-muted hover:text-cc-fg rounded-md hover:bg-cc-hover transition-colors cursor-pointer"
             >
               <span>{selectedModel.icon}</span>
@@ -929,6 +1062,226 @@ export function HomePage() {
               </div>
             )}
           </div>
+
+          {/* Branch from prior session (Claude only) */}
+          {backend === "claude" && (
+            <button
+              type="button"
+              onClick={() => setShowBranchingControls((v) => !v)}
+              className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors cursor-pointer ${
+                showBranchingControls
+                  ? "text-cc-primary bg-cc-primary/10 hover:bg-cc-primary/15"
+                  : "text-cc-muted hover:text-cc-fg hover:bg-cc-hover"
+              }`}
+              aria-expanded={showBranchingControls}
+              aria-controls="branch-from-session-panel"
+            >
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-3.5 h-3.5 opacity-70">
+                <path d="M5 3.5a2 2 0 110 4 2 2 0 010-4zm6 5a2 2 0 110 4 2 2 0 010-4z" />
+                <path d="M7 5.5h2.5A1.5 1.5 0 0111 7v1" strokeLinecap="round" />
+              </svg>
+              Branch from session
+            </button>
+          )}
+            </div>
+
+            {backend === "claude" && showBranchingControls && (
+              <div
+                id="branch-from-session-panel"
+                className="mt-2 px-3 py-2.5 rounded-lg border border-cc-border bg-cc-card/50 space-y-2"
+              >
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => void loadResumeCandidates()}
+                    disabled={resumeCandidatesLoading}
+                    className="px-2 py-1 rounded-md text-[11px] bg-cc-hover text-cc-muted hover:text-cc-fg transition-colors disabled:opacity-60 cursor-pointer"
+                  >
+                    {resumeCandidatesLoading ? "Refreshing..." : "Refresh detected sessions"}
+                  </button>
+                  {resumeCandidates.length > 0 && (
+                    <span className="text-[11px] text-cc-muted">
+                      Showing {visibleResumeCandidates.length} of {filteredActiveResumeCandidates.length}{" "}
+                      {normalizedResumeSearchQuery
+                        ? "matching"
+                        : (showingRecentOnly ? "recent" : "detected")} Claude session{filteredActiveResumeCandidates.length !== 1 ? "s" : ""}.
+                    </span>
+                  )}
+                  {!showOlderResumeCandidates && hiddenOlderResumeCount > 0 && recentResumeCandidates.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowOlderResumeCandidates(true);
+                        setVisibleResumeCandidateRows(INITIAL_VISIBLE_SESSION_ROWS);
+                      }}
+                      className="px-2 py-1 rounded-md text-[11px] bg-cc-hover text-cc-muted hover:text-cc-fg transition-colors cursor-pointer"
+                    >
+                      Include older ({hiddenOlderResumeCount})
+                    </button>
+                  )}
+                  {showOlderResumeCandidates && recentResumeCandidates.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowOlderResumeCandidates(false);
+                        setVisibleResumeCandidateRows(INITIAL_VISIBLE_SESSION_ROWS);
+                      }}
+                      className="px-2 py-1 rounded-md text-[11px] bg-cc-hover text-cc-muted hover:text-cc-fg transition-colors cursor-pointer"
+                    >
+                      Recent only
+                    </button>
+                  )}
+                </div>
+                <label className="block">
+                  <span className="sr-only">Search sessions</span>
+                  <div className="relative">
+                    <svg
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      className="w-3.5 h-3.5 text-cc-muted absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                    >
+                      <circle cx="7" cy="7" r="4.25" />
+                      <path d="M10.25 10.25L14 14" strokeLinecap="round" />
+                    </svg>
+                    <input
+                      type="text"
+                      value={resumeSearchQuery}
+                      onChange={(e) => setResumeSearchQuery(e.target.value)}
+                      placeholder="Search sessions, branch, folder, or ID"
+                      className="w-full bg-cc-card border border-cc-border rounded-md pl-8 pr-2.5 py-1.5 text-xs text-cc-fg placeholder:text-cc-muted focus:outline-none focus:ring-1 focus:ring-cc-primary/40 focus:border-cc-primary/40"
+                    />
+                  </div>
+                </label>
+                <p className="text-[11px] text-cc-muted">
+                  <span className="font-medium text-cc-fg">Fork</span> opens a new session that leaves the original untouched.
+                  <span className="mx-1">•</span>
+                  <span className="font-medium text-cc-fg">Continue</span> opens from the same linear thread.
+                </p>
+                {resumeCandidatesError && (
+                  <p className="text-[11px] text-cc-error">{resumeCandidatesError}</p>
+                )}
+                {!resumeCandidatesLoading && !resumeCandidatesError && filteredActiveResumeCandidates.length === 0 && (
+                  <p className="text-[11px] text-cc-muted">
+                    {normalizedResumeSearchQuery
+                      ? "No sessions match this search."
+                      : "No Claude sessions detected yet."}
+                  </p>
+                )}
+                {visibleResumeCandidates.length > 0 && (
+                  <div className="rounded-md border border-cc-border overflow-hidden bg-cc-card/50">
+                    <div className="hidden sm:grid sm:grid-cols-[minmax(0,1.5fr)_minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(0,0.7fr)_auto] px-2.5 py-1.5 border-b border-cc-border text-[10px] uppercase tracking-wider text-cc-muted">
+                      <span>Session</span>
+                      <span>Project</span>
+                      <span>Branch</span>
+                      <span>Last active</span>
+                      <span className="text-right">Action</span>
+                    </div>
+                    <div className="divide-y divide-cc-border/50">
+                      {visibleResumeCandidates.map((candidate) => {
+                        const title = getResumeCandidateTitle(candidate);
+                        const project = getResumeCandidateProject(candidate.cwd);
+                        const sourceLabel = candidate.source === "companion" ? "Companion" : "Claude";
+                        const selected = trimmedResumeSessionAt === candidate.resumeSessionId;
+                        return (
+                          <div
+                            key={`${candidate.resumeSessionId}-row-${candidate.sessionId}`}
+                            className="px-2.5 py-2.5 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1.5fr)_minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(0,0.7fr)_auto] sm:items-center"
+                          >
+                            <div className="min-w-0">
+                              <p className={`text-xs truncate ${selected ? "text-cc-primary font-medium" : "text-cc-fg"}`}>
+                                {title}
+                              </p>
+                              <div className="mt-0.5 flex items-center gap-1.5 text-[10px]">
+                                <span className="font-mono-code text-cc-muted">{shortSessionId(candidate.resumeSessionId)}</span>
+                                <span className="px-1 py-0.5 rounded bg-cc-hover text-cc-muted">{sourceLabel}</span>
+                              </div>
+                            </div>
+                            <div className="min-w-0 text-[11px] text-cc-muted sm:font-mono-code truncate" title={candidate.cwd}>
+                              <div className="truncate">{project}</div>
+                              <div className="mt-0.5 text-[10px] text-cc-muted/70 truncate" title={candidate.cwd}>
+                                {formatPathTail(candidate.cwd)}
+                              </div>
+                            </div>
+                            <div className="text-[11px] text-cc-muted sm:font-mono-code truncate">
+                              {candidate.gitBranch || "—"}
+                            </div>
+                            <div className="text-[11px] text-cc-muted">
+                              {formatTimeAgo(candidate.createdAt)}
+                            </div>
+                            <div className="sm:text-right flex gap-1.5 sm:justify-end">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setResumeSessionAt(candidate.resumeSessionId);
+                                  setForkSession(true);
+                                  void handleOpenBranchedSession(candidate, true);
+                                }}
+                                aria-label={`Fork and open ${title}`}
+                                className={`px-2 py-1 rounded-md text-[11px] border transition-colors cursor-pointer ${
+                                  selected && forkSession
+                                    ? "border-cc-primary/40 bg-cc-primary/10 text-cc-primary"
+                                    : "border-cc-border bg-cc-card text-cc-muted hover:text-cc-fg hover:bg-cc-hover"
+                                }`}
+                                title={`Fork and open now\n${candidate.cwd}${candidate.gitBranch ? ` (${candidate.gitBranch})` : ""}\n${candidate.resumeSessionId}`}
+                              >
+                                Fork
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setResumeSessionAt(candidate.resumeSessionId);
+                                  setForkSession(false);
+                                  void handleOpenBranchedSession(candidate, false);
+                                }}
+                                aria-label={`Continue and open ${title}`}
+                                className={`px-2 py-1 rounded-md text-[11px] border transition-colors cursor-pointer ${
+                                  selected && !forkSession
+                                    ? "border-cc-primary/40 bg-cc-primary/10 text-cc-primary"
+                                    : "border-cc-border bg-cc-card text-cc-muted hover:text-cc-fg hover:bg-cc-hover"
+                                }`}
+                                title={`Continue and open now\n${candidate.resumeSessionId}`}
+                              >
+                                Continue
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {hasMoreResumeCandidates && (
+                      <div className="px-2.5 py-2 border-t border-cc-border bg-cc-card/40">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setVisibleResumeCandidateRows((count) =>
+                              Math.min(count + LOAD_MORE_SESSION_ROWS, filteredActiveResumeCandidates.length)
+                            )}
+                          className="px-2 py-1 rounded-md text-[11px] bg-cc-hover text-cc-muted hover:text-cc-fg transition-colors cursor-pointer"
+                        >
+                          Load more ({filteredActiveResumeCandidates.length - visibleResumeCandidateRows} remaining)
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+                <p className="text-[11px] text-cc-muted">
+                  Fork/Continue opens the session immediately, then you can type directly in chat.
+                  Send from Home still starts a normal new session with your typed prompt.
+                </p>
+              </div>
+            )}
+          </div>
+
+          <LinearSection
+            cwd={cwd}
+            gitRepoInfo={gitRepoInfo}
+            linearConfigured={linearConfigured}
+            selectedLinearIssue={selectedLinearIssue}
+            onIssueSelect={handleIssueSelect}
+            onBranchFromIssue={handleBranchFromIssue}
+          />
         </div>
 
         {/* Branch behind remote warning */}

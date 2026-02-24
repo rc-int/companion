@@ -30,6 +30,8 @@ interface UpdateState {
   upstreamCompanionVersion: string | null;
   lastChecked: number;
   checking: boolean;
+  isServiceMode: boolean;
+  updateInProgress: boolean;
 }
 
 const state: UpdateState = {
@@ -38,12 +40,18 @@ const state: UpdateState = {
   upstreamCompanionVersion: null,
   lastChecked: 0,
   checking: false,
+  isServiceMode: false,
+  updateInProgress: false,
 };
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
 export function getUpdateState(): Readonly<UpdateState> {
   return { ...state };
+}
+
+export function setUpdateInProgress(inProgress: boolean): void {
+  state.updateInProgress = inProgress;
 }
 
 export function isUpdateAvailable(): boolean {

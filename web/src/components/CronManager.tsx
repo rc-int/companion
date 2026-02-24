@@ -1,8 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { api, type CronJobInfo } from "../api.js";
 import { getModelsForBackend, getDefaultModel, toModelOptions, type ModelOption } from "../utils/backends.js";
 import { FolderPicker } from "./FolderPicker.js";
+import { timeAgo } from "../utils/time-ago.js";
+import { useClickOutside } from "../utils/use-click-outside.js";
 
 interface Props {
   onClose?: () => void;
@@ -10,17 +12,6 @@ interface Props {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function timeAgo(ts: number): string {
-  const diff = Date.now() - ts;
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
 
 function timeUntil(ts: number): string {
   const diff = ts - Date.now();
@@ -576,16 +567,9 @@ function JobForm({
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Close model dropdown on outside click
-  useEffect(() => {
-    if (!showModelDropdown) return;
-    function handleClick(e: PointerEvent) {
-      if (modelDropdownRef.current && !modelDropdownRef.current.contains(e.target as Node)) {
-        setShowModelDropdown(false);
-      }
-    }
-    document.addEventListener("pointerdown", handleClick);
-    return () => document.removeEventListener("pointerdown", handleClick);
-  }, [showModelDropdown]);
+  const modelDropdownRefs = useMemo(() => [modelDropdownRef], []);
+  const closeModelDropdown = useCallback(() => setShowModelDropdown(false), []);
+  useClickOutside(modelDropdownRefs, closeModelDropdown, showModelDropdown);
 
   // Folder display label
   const dirLabel = form.cwd

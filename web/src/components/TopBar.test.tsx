@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
 vi.mock("../api.js", () => ({
@@ -16,7 +16,8 @@ interface MockStoreState {
   setSidebarOpen: ReturnType<typeof vi.fn>;
   taskPanelOpen: boolean;
   setTaskPanelOpen: ReturnType<typeof vi.fn>;
-  activeTab: "chat" | "diff" | "terminal";
+  editorTabEnabled: boolean;
+  activeTab: "chat" | "diff" | "terminal" | "editor";
   setActiveTab: ReturnType<typeof vi.fn>;
   markChatTabReentry: ReturnType<typeof vi.fn>;
   quickTerminalOpen: boolean;
@@ -25,7 +26,7 @@ interface MockStoreState {
   resetQuickTerminal: ReturnType<typeof vi.fn>;
   sessions: Map<string, { cwd?: string; is_containerized?: boolean }>;
   sdkSessions: { sessionId: string; cwd?: string; containerId?: string }[];
-  changedFiles: Map<string, Set<string>>;
+  gitChangedFilesCount: Map<string, number>;
 }
 
 let storeState: MockStoreState;
@@ -39,6 +40,7 @@ function resetStore(overrides: Partial<MockStoreState> = {}) {
     setSidebarOpen: vi.fn(),
     taskPanelOpen: false,
     setTaskPanelOpen: vi.fn(),
+    editorTabEnabled: true,
     activeTab: "chat",
     setActiveTab: vi.fn(),
     markChatTabReentry: vi.fn(),
@@ -48,7 +50,7 @@ function resetStore(overrides: Partial<MockStoreState> = {}) {
     resetQuickTerminal: vi.fn(),
     sessions: new Map([["s1", { cwd: "/repo" }]]),
     sdkSessions: [],
-    changedFiles: new Map(),
+    gitChangedFilesCount: new Map(),
     ...overrides,
   };
 }
@@ -67,13 +69,9 @@ beforeEach(() => {
 
 describe("TopBar", () => {
   it("shows diff badge count only for files within cwd", () => {
+    // gitChangedFilesCount is set by DiffPanel after filtering to cwd scope
     resetStore({
-      changedFiles: new Map([
-        [
-          "s1",
-          new Set(["/repo/src/a.ts", "/repo/src/b.ts", "/Users/stan/.claude/plans/plan.md"]),
-        ],
-      ]),
+      gitChangedFilesCount: new Map([["s1", 2]]),
     });
 
     render(<TopBar />);
@@ -81,11 +79,20 @@ describe("TopBar", () => {
     expect(screen.queryByText("3")).not.toBeInTheDocument();
   });
 
-  it("hides diff badge when all changed files are out of scope", () => {
+  it("uses theme-safe classes for the diff badge in dark mode", () => {
     resetStore({
-      changedFiles: new Map([["s1", new Set(["/Users/stan/.claude/plans/plan.md"])]]),
+      gitChangedFilesCount: new Map([["s1", 1]]),
     });
+    render(<TopBar />);
+    const badge = screen.getByText("1");
+    // Badge uses amber Tailwind utilities, not semantic cc-warning token.
+    expect(badge.className).toContain("bg-amber-100");
+    expect(badge.className).toContain("dark:bg-amber-900/60");
+    expect(badge.className).not.toContain("bg-cc-warning");
+  });
 
+  it("hides diff badge when no changed files", () => {
+    // gitChangedFilesCount not set (or 0) → no badge
     render(<TopBar />);
     expect(screen.queryByText("1")).not.toBeInTheDocument();
   });
@@ -139,6 +146,12 @@ describe("TopBar", () => {
     expect(storeState.openQuickTerminal).not.toHaveBeenCalled();
   });
 
+  it("hides editor tab when editor feature is disabled in settings", () => {
+    resetStore({ editorTabEnabled: false });
+    render(<TopBar />);
+    expect(screen.queryByRole("button", { name: "Editor tab" })).not.toBeInTheDocument();
+  });
+
   it("keeps terminal tab active when clicking shell while already active", () => {
     resetStore({
       activeTab: "terminal",
@@ -171,53 +184,33 @@ describe("TopBar", () => {
     expect(storeState.setActiveTab).toHaveBeenCalledWith("diff");
   });
 
-  it("samples the active tab background color from the pixel below it", async () => {
+  it("marks the active tab with a primary underline indicator", () => {
+    // Flat underline tabs: the active tab gets border-cc-primary, inactive tabs get border-transparent.
     resetStore({ activeTab: "diff" });
-    const underlay = document.createElement("div");
-    underlay.style.backgroundColor = "rgb(12, 34, 56)";
-    document.body.appendChild(underlay);
-
-    const originalElementsFromPoint = (document as Document & {
-      elementsFromPoint?: (x: number, y: number) => Element[];
-    }).elementsFromPoint;
-    Object.defineProperty(document, "elementsFromPoint", {
-      configurable: true,
-      writable: true,
-      value: () => [underlay],
-    });
-
     render(<TopBar />);
 
     const diffTab = screen.getByRole("button", { name: "Diffs tab" });
-    vi.spyOn(diffTab, "getBoundingClientRect").mockReturnValue({
-      x: 10,
-      y: 10,
-      left: 10,
-      top: 10,
-      right: 110,
-      bottom: 40,
-      width: 100,
-      height: 30,
-      toJSON: () => ({}),
-    } as DOMRect);
+    const chatTab = screen.getByRole("button", { name: "Session tab" });
 
-    act(() => {
-      window.dispatchEvent(new Event("resize"));
-    });
+    expect(diffTab.className).toContain("border-cc-primary");
+    expect(diffTab.className).toContain("text-cc-fg");
+    expect(chatTab.className).toContain("border-transparent");
+    expect(chatTab.className).toContain("text-cc-muted");
+  });
 
-    await waitFor(() => {
-      expect(diffTab).toHaveStyle({ backgroundColor: "rgb(12, 34, 56)" });
-    });
+  it("tab buttons have accessible names", () => {
+    // Verifies all workspace tabs are identifiable by assistive technology.
+    render(<TopBar />);
+    expect(screen.getByRole("button", { name: "Session tab" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Diffs tab" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Shell tab" })).toBeInTheDocument();
+  });
 
-    if (originalElementsFromPoint) {
-      Object.defineProperty(document, "elementsFromPoint", {
-        configurable: true,
-        writable: true,
-        value: originalElementsFromPoint,
-      });
-    } else {
-      Reflect.deleteProperty(document as unknown as Record<string, unknown>, "elementsFromPoint");
-    }
-    underlay.remove();
+  it("passes axe accessibility checks", async () => {
+    const { axe } = await import("vitest-axe");
+    resetStore();
+    const { container } = render(<TopBar />);
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
   });
 });

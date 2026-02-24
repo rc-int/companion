@@ -1,7 +1,6 @@
 import { useMemo } from "react";
 import { useStore, type QuickTerminalPlacement } from "../store.js";
 import { TerminalView } from "./TerminalView.js";
-
 interface SessionTerminalDockProps {
   sessionId: string;
   children?: React.ReactNode;
@@ -172,7 +171,7 @@ export function SessionTerminalDock({
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 bg-cc-bg">
+      <div className="flex-1 min-h-0" style={{ background: "var(--terminal-bg, #141413)" }}>
         {quickTerminalTabs.map((tab) => (
           <div key={tab.id} className={activeQuickTerminalTabId === tab.id ? "h-full" : "hidden"}>
             <TerminalView
@@ -199,8 +198,16 @@ export function SessionTerminalDock({
       ? "absolute inset-0 opacity-0 pointer-events-none"
       : `min-h-0 shrink-0 bg-cc-card ${layout.terminalWrapClass}`;
 
+  if (terminalOnly) {
+    return (
+      <div className="h-full min-h-0 bg-cc-card">
+        {terminalPanel}
+      </div>
+    );
+  }
+
   return (
-    <div className={`h-full min-h-0 ${terminalOnly ? "bg-cc-card" : suppressPanel ? "relative" : `flex ${layout.shellClass}`}`}>
+    <div className={`h-full min-h-0 ${suppressPanel ? "relative" : `flex ${layout.shellClass}`}`}>
       {contentArea}
       <div className={terminalAreaClass} aria-hidden={suppressPanel ? "true" : undefined}>
         {terminalPanel}

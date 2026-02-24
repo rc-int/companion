@@ -44,6 +44,7 @@ vi.mock("./git-utils.js", () => ({
   gitFetch: vi.fn(() => ({ success: true, output: "" })),
   gitPull: vi.fn(() => ({ success: true, output: "" })),
   checkoutBranch: vi.fn(),
+  checkoutOrCreateBranch: vi.fn(() => ({ created: false })),
   removeWorktree: vi.fn(),
   isWorktreeDirty: vi.fn(() => false),
 }));
@@ -61,13 +62,65 @@ vi.mock("./settings-manager.js", () => ({
   getSettings: vi.fn(() => ({
     openrouterApiKey: "",
     openrouterModel: "openrouter/free",
+    linearApiKey: "",
+    linearAutoTransition: false,
+    linearAutoTransitionStateId: "",
+    linearAutoTransitionStateName: "",
+    editorTabEnabled: false,
     updatedAt: 0,
   })),
   updateSettings: vi.fn((patch) => ({
     openrouterApiKey: patch.openrouterApiKey ?? "",
     openrouterModel: patch.openrouterModel ?? "openrouter/free",
+    linearApiKey: patch.linearApiKey ?? "",
+    linearAutoTransition: patch.linearAutoTransition ?? false,
+    linearAutoTransitionStateId: patch.linearAutoTransitionStateId ?? "",
+    linearAutoTransitionStateName: patch.linearAutoTransitionStateName ?? "",
+    editorTabEnabled: patch.editorTabEnabled ?? false,
     updatedAt: Date.now(),
   })),
+}));
+
+vi.mock("./linear-project-manager.js", () => ({
+  listMappings: vi.fn(() => []),
+  getMapping: vi.fn(() => null),
+  upsertMapping: vi.fn((repoRoot: string, data: { projectId: string; projectName: string }) => ({
+    repoRoot,
+    ...data,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  })),
+  removeMapping: vi.fn(() => false),
+  _resetForTest: vi.fn(),
+}));
+
+const mockDiscoverClaudeSessions = vi.hoisted(() => vi.fn(
+  (_options?: { limit?: number }) =>
+    [] as Array<{
+      sessionId: string;
+      cwd: string;
+      gitBranch?: string;
+      slug?: string;
+      lastActivityAt: number;
+      sourceFile: string;
+    }>
+));
+vi.mock("./claude-session-discovery.js", () => ({
+  discoverClaudeSessions: mockDiscoverClaudeSessions,
+}));
+
+const mockGetClaudeSessionHistoryPage = vi.hoisted(() => vi.fn(
+  (_options?: { sessionId: string; limit?: number; cursor?: number }) =>
+    null as {
+      sourceFile: string;
+      nextCursor: number;
+      hasMore: boolean;
+      totalMessages: number;
+      messages: Array<{ id: string; role: "user" | "assistant"; content: string; timestamp: number }>;
+    } | null
+));
+vi.mock("./claude-session-history.js", () => ({
+  getClaudeSessionHistoryPage: mockGetClaudeSessionHistoryPage,
 }));
 
 const mockGetUsageLimits = vi.hoisted(() => vi.fn());
@@ -132,6 +185,7 @@ import * as promptManager from "./prompt-manager.js";
 import * as gitUtils from "./git-utils.js";
 import * as sessionNames from "./session-names.js";
 import * as settingsManager from "./settings-manager.js";
+import * as linearProjectManager from "./linear-project-manager.js";
 import { containerManager } from "./container-manager.js";
 
 // ─── Mock factories ──────────────────────────────────────────────────────────
@@ -189,6 +243,8 @@ let terminalManager: { getInfo: ReturnType<typeof vi.fn>; spawn: ReturnType<type
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockDiscoverClaudeSessions.mockReturnValue([]);
+  mockGetClaudeSessionHistoryPage.mockReturnValue(null);
   mockUpdateCheckerState.currentVersion = "0.22.1";
   mockUpdateCheckerState.latestVersion = null;
   mockUpdateCheckerState.lastChecked = 0;
@@ -246,14 +302,35 @@ describe("POST /api/sessions/create", () => {
     const res = await app.request("/api/sessions/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "claude-sonnet-4-5-20250929", cwd: "/test" }),
+      body: JSON.stringify({ model: "claude-sonnet-4-6", cwd: "/test" }),
     });
 
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json).toMatchObject({ sessionId: "session-1", state: "starting", cwd: "/test" });
     expect(launcher.launch).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "claude-sonnet-4-5-20250929", cwd: "/test" }),
+      expect.objectContaining({ model: "claude-sonnet-4-6", cwd: "/test" }),
+    );
+  });
+
+  it("passes launch branching controls through to launcher", async () => {
+    const res = await app.request("/api/sessions/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        cwd: "/test",
+        resumeSessionAt: "  prior-session-123  ",
+        forkSession: true,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(launcher.launch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/test",
+        resumeSessionAt: "prior-session-123",
+        forkSession: true,
+      }),
     );
   });
 
@@ -298,7 +375,7 @@ describe("POST /api/sessions/create", () => {
 
     expect(res.status).toBe(200);
     expect(gitUtils.gitFetch).toHaveBeenCalledWith("/repo");
-    expect(gitUtils.checkoutBranch).not.toHaveBeenCalled();
+    expect(gitUtils.checkoutOrCreateBranch).not.toHaveBeenCalled();
     expect(gitUtils.gitPull).toHaveBeenCalledWith("/repo");
   });
 
@@ -319,12 +396,15 @@ describe("POST /api/sessions/create", () => {
 
     expect(res.status).toBe(200);
     expect(gitUtils.gitFetch).toHaveBeenCalledWith("/repo");
-    expect(gitUtils.checkoutBranch).toHaveBeenCalledWith("/repo", "main");
+    expect(gitUtils.checkoutOrCreateBranch).toHaveBeenCalledWith("/repo", "main", {
+      createBranch: undefined,
+      defaultBranch: "main",
+    });
     expect(gitUtils.gitPull).toHaveBeenCalledWith("/repo");
     expect(vi.mocked(gitUtils.gitFetch).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(gitUtils.checkoutBranch).mock.invocationCallOrder[0],
+      vi.mocked(gitUtils.checkoutOrCreateBranch).mock.invocationCallOrder[0],
     );
-    expect(vi.mocked(gitUtils.checkoutBranch).mock.invocationCallOrder[0]).toBeLessThan(
+    expect(vi.mocked(gitUtils.checkoutOrCreateBranch).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(gitUtils.gitPull).mock.invocationCallOrder[0],
     );
   });
@@ -546,6 +626,40 @@ describe("POST /api/sessions/create", () => {
     );
   });
 
+  it("always exposes VS Code editor port on new containers", async () => {
+    vi.mocked(envManager.getEnv).mockReturnValue({
+      name: "Companion",
+      slug: "companion",
+      variables: { CLAUDE_CODE_OAUTH_TOKEN: "token" },
+      baseImage: "the-companion:latest",
+      createdAt: 1000,
+      updatedAt: 1000,
+      ports: [3000],
+    } as any);
+    vi.mocked(envManager.getEffectiveImage).mockReturnValue("the-companion:latest");
+    const createSpy = vi.spyOn(containerManager, "createContainer").mockReturnValueOnce({
+      containerId: "cid-vscode",
+      name: "companion-vscode",
+      image: "the-companion:latest",
+      portMappings: [],
+      hostCwd: "/test",
+      containerCwd: "/workspace",
+      state: "running",
+    });
+    vi.spyOn(containerManager, "retrack").mockImplementation(() => {});
+
+    const res = await app.request("/api/sessions/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd: "/test", envSlug: "companion" }),
+    });
+
+    expect(res.status).toBe(200);
+    const config = createSpy.mock.calls[0][2];
+    expect(config.ports).toContain(3000);
+    expect(config.ports).toContain(13337);
+  });
+
   it("waits for background pull when image is not ready", async () => {
     // imagePullManager reports the image is not ready initially,
     // but waitForReady resolves to true (background pull succeeds).
@@ -738,6 +852,29 @@ describe("GET /api/sessions", () => {
       totalLinesRemoved: 0,
     });
   });
+
+  it("prefers bridge cwd over launcher cwd when available", async () => {
+    const sessions = [
+      { sessionId: "s1", state: "running", cwd: "/workspace" },
+    ];
+    launcher.listSessions.mockReturnValue(sessions);
+    vi.mocked(sessionNames.getAllNames).mockReturnValue({});
+    bridge.getAllSessions.mockReturnValue([
+      {
+        session_id: "s1",
+        cwd: "/home/ubuntu/companion",
+      },
+    ]);
+
+    const res = await app.request("/api/sessions", { method: "GET" });
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json[0]).toMatchObject({
+      sessionId: "s1",
+      cwd: "/home/ubuntu/companion",
+    });
+  });
 });
 
 describe("GET /api/sessions/:id", () => {
@@ -760,6 +897,181 @@ describe("GET /api/sessions/:id", () => {
     expect(res.status).toBe(404);
     const json = await res.json();
     expect(json).toEqual({ error: "Session not found" });
+  });
+});
+
+describe("GET /api/claude/sessions/discover", () => {
+  it("returns discovered Claude sessions and forwards limit", async () => {
+    mockDiscoverClaudeSessions.mockReturnValue([
+      {
+        sessionId: "session-123",
+        cwd: "/repo",
+        gitBranch: "feature/branch",
+        slug: "calm-mountain",
+        lastActivityAt: 12345,
+        sourceFile: "/Users/test/.claude/projects/repo/session-123.jsonl",
+      },
+    ]);
+
+    const res = await app.request("/api/claude/sessions/discover?limit=250", { method: "GET" });
+
+    expect(res.status).toBe(200);
+    expect(mockDiscoverClaudeSessions).toHaveBeenCalledWith({ limit: 250 });
+    const json = await res.json();
+    expect(json).toEqual({
+      sessions: [
+        {
+          sessionId: "session-123",
+          cwd: "/repo",
+          gitBranch: "feature/branch",
+          slug: "calm-mountain",
+          lastActivityAt: 12345,
+          sourceFile: "/Users/test/.claude/projects/repo/session-123.jsonl",
+        },
+      ],
+    });
+  });
+});
+
+describe("GET /api/claude/sessions/:id/history", () => {
+  it("returns paged Claude transcript history and forwards cursor/limit", async () => {
+    // Validate route wiring so frontend pagination requests reach the loader with the same cursor/limit.
+    mockGetClaudeSessionHistoryPage.mockReturnValue({
+      sourceFile: "/Users/test/.claude/projects/repo/session-123.jsonl",
+      nextCursor: 80,
+      hasMore: true,
+      totalMessages: 140,
+      messages: [
+        {
+          id: "resume-session-123-user-u1",
+          role: "user",
+          content: "Prior prompt",
+          timestamp: 1,
+        },
+        {
+          id: "resume-session-123-assistant-a1",
+          role: "assistant",
+          content: "Prior answer",
+          timestamp: 2,
+        },
+      ],
+    });
+
+    const res = await app.request("/api/claude/sessions/session-123/history?limit=40&cursor=40", { method: "GET" });
+
+    expect(res.status).toBe(200);
+    expect(mockGetClaudeSessionHistoryPage).toHaveBeenCalledWith({
+      sessionId: "session-123",
+      limit: 40,
+      cursor: 40,
+    });
+    const json = await res.json();
+    expect(json).toMatchObject({
+      nextCursor: 80,
+      hasMore: true,
+      totalMessages: 140,
+    });
+    expect(json.messages).toHaveLength(2);
+  });
+
+  it("returns 404 when transcript history does not exist", async () => {
+    // Validate explicit not-found semantics so UI can render a clear empty/error state.
+    mockGetClaudeSessionHistoryPage.mockReturnValue(null);
+
+    const res = await app.request("/api/claude/sessions/missing/history", { method: "GET" });
+
+    expect(res.status).toBe(404);
+    const json = await res.json();
+    expect(json).toEqual({ error: "Claude session history not found" });
+  });
+});
+
+describe("POST /api/sessions/:id/editor/start", () => {
+  it("returns unavailable when code-server is not installed on host", async () => {
+    launcher.getSession.mockReturnValue({
+      sessionId: "s1",
+      state: "running",
+      cwd: "/repo",
+    });
+    mockResolveBinary.mockImplementation((name: string) => (name === "code-server" ? null : null));
+
+    const res = await app.request("/api/sessions/s1/editor/start", { method: "POST" });
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toMatchObject({
+      available: false,
+      installed: false,
+      mode: "host",
+    });
+    expect(json.message).toContain("not installed");
+  });
+
+  it("starts host editor and returns a URL when code-server is available", async () => {
+    launcher.getSession.mockReturnValue({
+      sessionId: "s1",
+      state: "running",
+      cwd: "/repo/my app",
+    });
+    mockResolveBinary.mockImplementation((name: string) => (name === "code-server" ? "/usr/bin/code-server" : null));
+    // Mock fetch so the readiness poll resolves immediately instead of timing out
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("ok", { status: 200 }));
+
+    const res = await app.request("/api/sessions/s1/editor/start", { method: "POST" });
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toMatchObject({
+      available: true,
+      installed: true,
+      mode: "host",
+      url: "http://localhost:13338?folder=%2Frepo%2Fmy%20app",
+    });
+    expect(execSync).toHaveBeenCalledWith(
+      expect.stringContaining("--bind-addr 127.0.0.1:13338"),
+      expect.objectContaining({ timeout: 10_000 }),
+    );
+    fetchSpy.mockRestore();
+  });
+
+  it("starts container editor and returns mapped host URL", async () => {
+    launcher.getSession.mockReturnValue({
+      sessionId: "s1",
+      state: "running",
+      cwd: "/repo",
+      containerId: "cid-1",
+    });
+    vi.spyOn(containerManager, "getContainer").mockReturnValue({
+      containerId: "cid-1",
+      name: "companion-s1",
+      image: "the-companion:latest",
+      portMappings: [{ containerPort: 13337, hostPort: 49152 }],
+      hostCwd: "/repo",
+      containerCwd: "/workspace",
+      state: "running",
+    });
+    vi.spyOn(containerManager, "hasBinaryInContainer").mockReturnValue(true);
+    vi.spyOn(containerManager, "isContainerAlive").mockReturnValue("running");
+    const execSpy = vi.spyOn(containerManager, "execInContainer").mockReturnValue("");
+    // Mock fetch so the readiness poll resolves immediately instead of timing out
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("ok", { status: 200 }));
+
+    const res = await app.request("/api/sessions/s1/editor/start", { method: "POST" });
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toMatchObject({
+      available: true,
+      installed: true,
+      mode: "container",
+      url: "http://localhost:49152?folder=%2Fworkspace",
+    });
+    expect(execSpy).toHaveBeenCalledWith(
+      "cid-1",
+      expect.arrayContaining(["sh", "-lc"]),
+      10_000,
+    );
+    fetchSpy.mockRestore();
   });
 });
 
@@ -1176,6 +1488,11 @@ describe("GET /api/settings", () => {
     vi.mocked(settingsManager.getSettings).mockReturnValue({
       openrouterApiKey: "or-secret",
       openrouterModel: "openrouter/free",
+      linearApiKey: "",
+      linearAutoTransition: false,
+      linearAutoTransitionStateId: "",
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
       updatedAt: 123,
     });
 
@@ -1186,6 +1503,10 @@ describe("GET /api/settings", () => {
     expect(json).toEqual({
       openrouterApiKeyConfigured: true,
       openrouterModel: "openrouter/free",
+      linearApiKeyConfigured: false,
+      linearAutoTransition: false,
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
     });
   });
 
@@ -1193,6 +1514,11 @@ describe("GET /api/settings", () => {
     vi.mocked(settingsManager.getSettings).mockReturnValue({
       openrouterApiKey: "",
       openrouterModel: "openai/gpt-4o-mini",
+      linearApiKey: "lin_api_123",
+      linearAutoTransition: false,
+      linearAutoTransitionStateId: "",
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
       updatedAt: 123,
     });
 
@@ -1203,6 +1529,10 @@ describe("GET /api/settings", () => {
     expect(json).toEqual({
       openrouterApiKeyConfigured: false,
       openrouterModel: "openai/gpt-4o-mini",
+      linearApiKeyConfigured: true,
+      linearAutoTransition: false,
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
     });
   });
 });
@@ -1212,6 +1542,11 @@ describe("PUT /api/settings", () => {
     vi.mocked(settingsManager.updateSettings).mockReturnValue({
       openrouterApiKey: "new-key",
       openrouterModel: "openrouter/free",
+      linearApiKey: "",
+      linearAutoTransition: false,
+      linearAutoTransitionStateId: "",
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
       updatedAt: 456,
     });
 
@@ -1225,11 +1560,20 @@ describe("PUT /api/settings", () => {
     expect(settingsManager.updateSettings).toHaveBeenCalledWith({
       openrouterApiKey: "new-key",
       openrouterModel: undefined,
+      linearApiKey: undefined,
+      linearAutoTransition: undefined,
+      linearAutoTransitionStateId: undefined,
+      linearAutoTransitionStateName: undefined,
+      editorTabEnabled: undefined,
     });
     const json = await res.json();
     expect(json).toEqual({
       openrouterApiKeyConfigured: true,
       openrouterModel: "openrouter/free",
+      linearApiKeyConfigured: false,
+      linearAutoTransition: false,
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
     });
   });
 
@@ -1237,19 +1581,29 @@ describe("PUT /api/settings", () => {
     vi.mocked(settingsManager.updateSettings).mockReturnValue({
       openrouterApiKey: "trimmed-key",
       openrouterModel: "openrouter/free",
+      linearApiKey: "lin_api_trimmed",
+      linearAutoTransition: false,
+      linearAutoTransitionStateId: "",
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
       updatedAt: 789,
     });
 
     const res = await app.request("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ openrouterApiKey: "  trimmed-key  ", openrouterModel: "   " }),
+      body: JSON.stringify({ openrouterApiKey: "  trimmed-key  ", openrouterModel: "   ", linearApiKey: "  lin_api_trimmed  " }),
     });
 
     expect(res.status).toBe(200);
     expect(settingsManager.updateSettings).toHaveBeenCalledWith({
       openrouterApiKey: "trimmed-key",
       openrouterModel: "openrouter/free",
+      linearApiKey: "lin_api_trimmed",
+      linearAutoTransition: undefined,
+      linearAutoTransitionStateId: undefined,
+      linearAutoTransitionStateName: undefined,
+      editorTabEnabled: undefined,
     });
   });
 
@@ -1257,6 +1611,11 @@ describe("PUT /api/settings", () => {
     vi.mocked(settingsManager.updateSettings).mockReturnValue({
       openrouterApiKey: "existing-key",
       openrouterModel: "openai/gpt-4o-mini",
+      linearApiKey: "lin_api_existing",
+      linearAutoTransition: false,
+      linearAutoTransitionStateId: "",
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
       updatedAt: 999,
     });
 
@@ -1270,7 +1629,24 @@ describe("PUT /api/settings", () => {
     expect(settingsManager.updateSettings).toHaveBeenCalledWith({
       openrouterApiKey: undefined,
       openrouterModel: "openai/gpt-4o-mini",
+      linearApiKey: undefined,
+      linearAutoTransition: undefined,
+      linearAutoTransitionStateId: undefined,
+      linearAutoTransitionStateName: undefined,
+      editorTabEnabled: undefined,
     });
+  });
+
+  it("returns 400 for non-string linear key", async () => {
+    const res = await app.request("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ linearApiKey: 123 }),
+    });
+
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json).toEqual({ error: "linearApiKey must be a string" });
   });
 
   it("returns 400 for non-string model", async () => {
@@ -1297,6 +1673,18 @@ describe("PUT /api/settings", () => {
     expect(json).toEqual({ error: "openrouterApiKey must be a string" });
   });
 
+  it("returns 400 for non-boolean editor tab setting", async () => {
+    const res = await app.request("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ editorTabEnabled: "yes" }),
+    });
+
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json).toEqual({ error: "editorTabEnabled must be a boolean" });
+  });
+
   it("returns 400 when no settings fields are provided", async () => {
     const res = await app.request("/api/settings", {
       method: "PUT",
@@ -1310,6 +1698,775 @@ describe("PUT /api/settings", () => {
   });
 });
 
+describe("GET /api/linear/issues", () => {
+  it("returns empty list when query is blank", async () => {
+    const res = await app.request("/api/linear/issues?query=   ", { method: "GET" });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toEqual({ issues: [] });
+  });
+
+  it("returns 400 when linear key is not configured", async () => {
+    vi.mocked(settingsManager.getSettings).mockReturnValue({
+      openrouterApiKey: "",
+      openrouterModel: "openrouter/free",
+      linearApiKey: "",
+      linearAutoTransition: false,
+      linearAutoTransitionStateId: "",
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
+      updatedAt: 0,
+    });
+
+    const res = await app.request("/api/linear/issues?query=auth", { method: "GET" });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json).toEqual({ error: "Linear API key is not configured" });
+  });
+
+  it("proxies Linear issue search results with branchName", async () => {
+    vi.mocked(settingsManager.getSettings).mockReturnValue({
+      openrouterApiKey: "",
+      openrouterModel: "openrouter/free",
+      linearApiKey: "lin_api_123",
+      linearAutoTransition: false,
+      linearAutoTransitionStateId: "",
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
+      updatedAt: 0,
+    });
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      statusText: "OK",
+      json: async () => ({
+        data: {
+          searchIssues: {
+            nodes: [{
+              id: "issue-id",
+              identifier: "ENG-123",
+              title: "Fix auth flow",
+              description: "401 on refresh token",
+              url: "https://linear.app/acme/issue/ENG-123/fix-auth-flow",
+              branchName: "eng-123-fix-auth-flow",
+              priorityLabel: "High",
+              state: { name: "In Progress", type: "started" },
+              team: { id: "team-eng-1", key: "ENG", name: "Engineering" },
+            }],
+          },
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await app.request("/api/linear/issues?query=auth&limit=5", { method: "GET" });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toEqual({
+      issues: [{
+        id: "issue-id",
+        identifier: "ENG-123",
+        title: "Fix auth flow",
+        description: "401 on refresh token",
+        url: "https://linear.app/acme/issue/ENG-123/fix-auth-flow",
+        branchName: "eng-123-fix-auth-flow",
+        priorityLabel: "High",
+        stateName: "In Progress",
+        stateType: "started",
+        teamName: "Engineering",
+        teamKey: "ENG",
+        teamId: "team-eng-1",
+      }],
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.linear.app/graphql",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ Authorization: "lin_api_123" }),
+      }),
+    );
+    const [, requestInit] = vi.mocked(fetchMock).mock.calls[0];
+    const requestBody = JSON.parse(String(requestInit?.body ?? "{}"));
+    // Verify branchName is requested in the GraphQL query
+    expect(requestBody.query).toContain("branchName");
+    expect(requestBody.query).toContain("searchIssues(term: $term, first: $first)");
+    expect(requestBody.variables).toEqual({ term: "auth", first: 5 });
+    vi.unstubAllGlobals();
+  });
+
+  it("returns only active issues and orders backlog-like before in-progress", async () => {
+    // The home page issue picker should hide done/cancelled work and show backlog-like
+    // items before currently started ones.
+    vi.mocked(settingsManager.getSettings).mockReturnValue({
+      openrouterApiKey: "",
+      openrouterModel: "openrouter/free",
+      linearApiKey: "lin_api_123",
+      linearAutoTransition: false,
+      linearAutoTransitionStateId: "",
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
+      updatedAt: 0,
+    });
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      statusText: "OK",
+      json: async () => ({
+        data: {
+          searchIssues: {
+            nodes: [
+              {
+                id: "done-1",
+                identifier: "ENG-10",
+                title: "Already done",
+                description: "",
+                url: "https://linear.app/acme/issue/ENG-10",
+                branchName: null,
+                priorityLabel: null,
+                state: { name: "Done", type: "completed" },
+                team: { id: "team-1", key: "ENG", name: "Engineering" },
+              },
+              {
+                id: "started-1",
+                identifier: "ENG-11",
+                title: "Implement feature",
+                description: "",
+                url: "https://linear.app/acme/issue/ENG-11",
+                branchName: null,
+                priorityLabel: null,
+                state: { name: "In Progress", type: "started" },
+                team: { id: "team-1", key: "ENG", name: "Engineering" },
+              },
+              {
+                id: "backlog-1",
+                identifier: "ENG-12",
+                title: "Investigate bug",
+                description: "",
+                url: "https://linear.app/acme/issue/ENG-12",
+                branchName: null,
+                priorityLabel: null,
+                state: { name: "Backlog", type: "unstarted" },
+                team: { id: "team-1", key: "ENG", name: "Engineering" },
+              },
+              {
+                id: "cancelled-1",
+                identifier: "ENG-13",
+                title: "Won't do",
+                description: "",
+                url: "https://linear.app/acme/issue/ENG-13",
+                branchName: null,
+                priorityLabel: null,
+                state: { name: "Cancelled", type: "cancelled" },
+                team: { id: "team-1", key: "ENG", name: "Engineering" },
+              },
+            ],
+          },
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await app.request("/api/linear/issues?query=eng", { method: "GET" });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.issues.map((i: { identifier: string }) => i.identifier)).toEqual(["ENG-12", "ENG-11"]);
+    vi.unstubAllGlobals();
+  });
+
+  it("returns empty branchName when Linear does not provide one", async () => {
+    // Verifies fallback: when branchName is null/missing from Linear API,
+    // the response maps it to an empty string so the frontend can generate a slug
+    vi.mocked(settingsManager.getSettings).mockReturnValue({
+      openrouterApiKey: "",
+      openrouterModel: "openrouter/free",
+      linearApiKey: "lin_api_123",
+      linearAutoTransition: false,
+      linearAutoTransitionStateId: "",
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
+      updatedAt: 0,
+    });
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      statusText: "OK",
+      json: async () => ({
+        data: {
+          searchIssues: {
+            nodes: [{
+              id: "issue-id-2",
+              identifier: "ENG-456",
+              title: "Add dark mode",
+              description: null,
+              url: "https://linear.app/acme/issue/ENG-456/add-dark-mode",
+              branchName: null,
+              priorityLabel: null,
+              state: null,
+              team: null,
+            }],
+          },
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await app.request("/api/linear/issues?query=dark", { method: "GET" });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.issues[0].branchName).toBe("");
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("GET /api/linear/connection", () => {
+  it("returns 400 when linear key is not configured", async () => {
+    vi.mocked(settingsManager.getSettings).mockReturnValue({
+      openrouterApiKey: "",
+      openrouterModel: "openrouter/free",
+      linearApiKey: "",
+      linearAutoTransition: false,
+      linearAutoTransitionStateId: "",
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
+      updatedAt: 0,
+    });
+
+    const res = await app.request("/api/linear/connection", { method: "GET" });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json).toEqual({ error: "Linear API key is not configured" });
+  });
+
+  it("returns viewer/team info when connection works", async () => {
+    vi.mocked(settingsManager.getSettings).mockReturnValue({
+      openrouterApiKey: "",
+      openrouterModel: "openrouter/free",
+      linearApiKey: "lin_api_123",
+      linearAutoTransition: false,
+      linearAutoTransitionStateId: "",
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
+      updatedAt: 0,
+    });
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      statusText: "OK",
+      json: async () => ({
+        data: {
+          viewer: { id: "u1", name: "Ada", email: "ada@example.com" },
+          teams: { nodes: [{ id: "t1", key: "ENG", name: "Engineering" }] },
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await app.request("/api/linear/connection", { method: "GET" });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toEqual({
+      connected: true,
+      viewerName: "Ada",
+      viewerEmail: "ada@example.com",
+      teamName: "Engineering",
+      teamKey: "ENG",
+    });
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("POST /api/linear/issues/:id/transition", () => {
+  // Skips when auto-transition is disabled in settings
+  it("skips when auto-transition is disabled", async () => {
+    vi.mocked(settingsManager.getSettings).mockReturnValue({
+      openrouterApiKey: "",
+      openrouterModel: "openrouter/free",
+      linearApiKey: "lin_api_123",
+      linearAutoTransition: false,
+      linearAutoTransitionStateId: "state-123",
+      linearAutoTransitionStateName: "In Progress",
+      editorTabEnabled: false,
+      updatedAt: 0,
+    });
+
+    const res = await app.request("/api/linear/issues/issue-123/transition", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toEqual({ ok: true, skipped: true, reason: "auto_transition_disabled" });
+  });
+
+  // Skips when no target state is configured
+  it("skips when no target state is configured", async () => {
+    vi.mocked(settingsManager.getSettings).mockReturnValue({
+      openrouterApiKey: "",
+      openrouterModel: "openrouter/free",
+      linearApiKey: "lin_api_123",
+      linearAutoTransition: true,
+      linearAutoTransitionStateId: "",
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
+      updatedAt: 0,
+    });
+
+    const res = await app.request("/api/linear/issues/issue-123/transition", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toEqual({ ok: true, skipped: true, reason: "no_target_state_configured" });
+  });
+
+  it("returns 400 when linear key is not configured", async () => {
+    vi.mocked(settingsManager.getSettings).mockReturnValue({
+      openrouterApiKey: "",
+      openrouterModel: "openrouter/free",
+      linearApiKey: "",
+      linearAutoTransition: true,
+      linearAutoTransitionStateId: "state-123",
+      linearAutoTransitionStateName: "In Progress",
+      editorTabEnabled: false,
+      updatedAt: 0,
+    });
+
+    const res = await app.request("/api/linear/issues/issue-123/transition", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json).toEqual({ error: "Linear API key is not configured" });
+  });
+
+  // Happy path: uses configured stateId to update the issue directly
+  it("transitions issue to configured state", async () => {
+    vi.mocked(settingsManager.getSettings).mockReturnValue({
+      openrouterApiKey: "",
+      openrouterModel: "openrouter/free",
+      linearApiKey: "lin_api_123",
+      linearAutoTransition: true,
+      linearAutoTransitionStateId: "state-doing",
+      linearAutoTransitionStateName: "Doing",
+      editorTabEnabled: false,
+      updatedAt: 0,
+    });
+
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      statusText: "OK",
+      json: async () => ({
+        data: {
+          issueUpdate: {
+            success: true,
+            issue: {
+              id: "issue-123",
+              identifier: "ENG-456",
+              state: { name: "Doing", type: "started" },
+            },
+          },
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await app.request("/api/linear/issues/issue-123/transition", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toEqual({
+      ok: true,
+      skipped: false,
+      issue: {
+        id: "issue-123",
+        identifier: "ENG-456",
+        stateName: "Doing",
+        stateType: "started",
+      },
+    });
+
+    // Verify only one GraphQL call (no states query needed)
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body ?? "{}"));
+    expect(body.query).toContain("issueUpdate");
+    expect(body.variables).toEqual({ issueId: "issue-123", stateId: "state-doing" });
+
+    vi.unstubAllGlobals();
+  });
+
+  // Error case: Linear API returns an error when updating issue state
+  it("returns 502 when issue update fails", async () => {
+    vi.mocked(settingsManager.getSettings).mockReturnValue({
+      openrouterApiKey: "",
+      openrouterModel: "openrouter/free",
+      linearApiKey: "lin_api_123",
+      linearAutoTransition: true,
+      linearAutoTransitionStateId: "state-doing",
+      linearAutoTransitionStateName: "Doing",
+      editorTabEnabled: false,
+      updatedAt: 0,
+    });
+
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      statusText: "Bad Request",
+      json: async () => ({
+        errors: [{ message: "Issue not found" }],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await app.request("/api/linear/issues/issue-123/transition", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(502);
+    const json = await res.json();
+    expect(json).toEqual({ error: "Issue not found" });
+
+    vi.unstubAllGlobals();
+  });
+});
+
+// ─── Linear projects ─────────────────────────────────────────────────────────
+
+describe("GET /api/linear/projects", () => {
+  it("returns 400 when linear key is not configured", async () => {
+    vi.mocked(settingsManager.getSettings).mockReturnValue({
+      openrouterApiKey: "",
+      openrouterModel: "openrouter/free",
+      linearApiKey: "",
+      linearAutoTransition: false,
+      linearAutoTransitionStateId: "",
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
+      updatedAt: 0,
+    });
+
+    const res = await app.request("/api/linear/projects", { method: "GET" });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json).toEqual({ error: "Linear API key is not configured" });
+  });
+
+  it("returns project list from Linear API", async () => {
+    vi.mocked(settingsManager.getSettings).mockReturnValue({
+      openrouterApiKey: "",
+      openrouterModel: "openrouter/free",
+      linearApiKey: "lin_api_123",
+      linearAutoTransition: false,
+      linearAutoTransitionStateId: "",
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
+      updatedAt: 0,
+    });
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      statusText: "OK",
+      json: async () => ({
+        data: {
+          projects: {
+            nodes: [
+              { id: "p1", name: "My Feature", state: "started" },
+              { id: "p2", name: "Backend Rework", state: "planned" },
+            ],
+          },
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await app.request("/api/linear/projects", { method: "GET" });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toEqual({
+      projects: [
+        { id: "p1", name: "My Feature", state: "started" },
+        { id: "p2", name: "Backend Rework", state: "planned" },
+      ],
+    });
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("GET /api/linear/project-issues", () => {
+  it("returns 400 when projectId is missing", async () => {
+    const res = await app.request("/api/linear/project-issues", { method: "GET" });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json).toEqual({ error: "projectId is required" });
+  });
+
+  it("returns 400 when linear key is not configured", async () => {
+    vi.mocked(settingsManager.getSettings).mockReturnValue({
+      openrouterApiKey: "",
+      openrouterModel: "openrouter/free",
+      linearApiKey: "",
+      linearAutoTransition: false,
+      linearAutoTransitionStateId: "",
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
+      updatedAt: 0,
+    });
+
+    const res = await app.request("/api/linear/project-issues?projectId=p1", { method: "GET" });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json).toEqual({ error: "Linear API key is not configured" });
+  });
+
+  it("returns recent non-done issues for a project", async () => {
+    vi.mocked(settingsManager.getSettings).mockReturnValue({
+      openrouterApiKey: "",
+      openrouterModel: "openrouter/free",
+      linearApiKey: "lin_api_123",
+      linearAutoTransition: false,
+      linearAutoTransitionStateId: "",
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
+      updatedAt: 0,
+    });
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      statusText: "OK",
+      json: async () => ({
+        data: {
+          issues: {
+            nodes: [{
+              id: "issue-1",
+              identifier: "ENG-42",
+              title: "Implement dark mode",
+              description: "Add theme support",
+              url: "https://linear.app/acme/issue/ENG-42",
+              priorityLabel: "Medium",
+              state: { name: "In Progress", type: "started" },
+              team: { key: "ENG", name: "Engineering" },
+              assignee: { name: "Ada" },
+              updatedAt: "2026-02-19T10:00:00Z",
+            }],
+          },
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await app.request("/api/linear/project-issues?projectId=p1&limit=5", { method: "GET" });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toEqual({
+      issues: [{
+        id: "issue-1",
+        identifier: "ENG-42",
+        title: "Implement dark mode",
+        description: "Add theme support",
+        url: "https://linear.app/acme/issue/ENG-42",
+        priorityLabel: "Medium",
+        stateName: "In Progress",
+        stateType: "started",
+        teamName: "Engineering",
+        teamKey: "ENG",
+        assigneeName: "Ada",
+        updatedAt: "2026-02-19T10:00:00Z",
+      }],
+    });
+
+    // Verify the GraphQL query uses projectId variable and correct limit
+    const [, requestInit] = vi.mocked(fetchMock).mock.calls[0];
+    const requestBody = JSON.parse(String(requestInit?.body ?? "{}"));
+    expect(requestBody.variables).toEqual({ projectId: "p1", first: 5 });
+    vi.unstubAllGlobals();
+  });
+
+  it("orders project issues backlog-like first, then in-progress", async () => {
+    // UI issue lists should present queued/backlog work first, followed by started work.
+    vi.mocked(settingsManager.getSettings).mockReturnValue({
+      openrouterApiKey: "",
+      openrouterModel: "openrouter/free",
+      linearApiKey: "lin_api_123",
+      linearAutoTransition: false,
+      linearAutoTransitionStateId: "",
+      linearAutoTransitionStateName: "",
+      editorTabEnabled: false,
+      updatedAt: 0,
+    });
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      statusText: "OK",
+      json: async () => ({
+        data: {
+          issues: {
+            nodes: [
+              {
+                id: "started-1",
+                identifier: "ENG-100",
+                title: "Ship API",
+                description: "",
+                url: "https://linear.app/acme/issue/ENG-100",
+                priorityLabel: null,
+                state: { name: "In Progress", type: "started" },
+                team: { key: "ENG", name: "Engineering" },
+                assignee: null,
+                updatedAt: "2026-02-19T10:00:00Z",
+              },
+              {
+                id: "backlog-1",
+                identifier: "ENG-101",
+                title: "Scope feature",
+                description: "",
+                url: "https://linear.app/acme/issue/ENG-101",
+                priorityLabel: null,
+                state: { name: "Backlog", type: "unstarted" },
+                team: { key: "ENG", name: "Engineering" },
+                assignee: null,
+                updatedAt: "2026-02-19T09:00:00Z",
+              },
+            ],
+          },
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await app.request("/api/linear/project-issues?projectId=p1", { method: "GET" });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.issues.map((i: { identifier: string }) => i.identifier)).toEqual(["ENG-101", "ENG-100"]);
+    vi.unstubAllGlobals();
+  });
+});
+
+// ─── Linear project mappings ─────────────────────────────────────────────────
+
+describe("GET /api/linear/project-mappings", () => {
+  it("returns mapping for a specific repoRoot", async () => {
+    const mockMapping = {
+      repoRoot: "/home/user/project",
+      projectId: "p1",
+      projectName: "My Feature",
+      createdAt: 1000,
+      updatedAt: 1000,
+    };
+    vi.mocked(linearProjectManager.getMapping).mockReturnValue(mockMapping);
+
+    const res = await app.request(
+      "/api/linear/project-mappings?repoRoot=%2Fhome%2Fuser%2Fproject",
+      { method: "GET" },
+    );
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toEqual({ mapping: mockMapping });
+    expect(linearProjectManager.getMapping).toHaveBeenCalledWith("/home/user/project");
+  });
+
+  it("returns null mapping when repoRoot has no mapping", async () => {
+    vi.mocked(linearProjectManager.getMapping).mockReturnValue(null);
+
+    const res = await app.request(
+      "/api/linear/project-mappings?repoRoot=%2Funknown",
+      { method: "GET" },
+    );
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toEqual({ mapping: null });
+  });
+
+  it("returns all mappings when no repoRoot specified", async () => {
+    const mockMappings = [
+      { repoRoot: "/repo-a", projectId: "p1", projectName: "My Feature", createdAt: 1000, updatedAt: 1000 },
+      { repoRoot: "/repo-b", projectId: "p2", projectName: "Backend Rework", createdAt: 2000, updatedAt: 2000 },
+    ];
+    vi.mocked(linearProjectManager.listMappings).mockReturnValue(mockMappings);
+
+    const res = await app.request("/api/linear/project-mappings", { method: "GET" });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toEqual({ mappings: mockMappings });
+  });
+});
+
+describe("PUT /api/linear/project-mappings", () => {
+  it("returns 400 when required fields are missing", async () => {
+    const res = await app.request("/api/linear/project-mappings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repoRoot: "/repo" }),
+    });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json).toEqual({ error: "repoRoot, projectId, and projectName are required" });
+  });
+
+  it("creates a mapping successfully", async () => {
+    const res = await app.request("/api/linear/project-mappings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        repoRoot: "/home/user/project",
+        projectId: "p1",
+        projectName: "My Feature",
+      }),
+    });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.mapping).toBeDefined();
+    expect(json.mapping.repoRoot).toBe("/home/user/project");
+    expect(json.mapping.projectName).toBe("My Feature");
+    expect(linearProjectManager.upsertMapping).toHaveBeenCalledWith(
+      "/home/user/project",
+      { projectId: "p1", projectName: "My Feature" },
+    );
+  });
+});
+
+describe("DELETE /api/linear/project-mappings", () => {
+  it("returns 400 when repoRoot is missing", async () => {
+    const res = await app.request("/api/linear/project-mappings", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json).toEqual({ error: "repoRoot is required" });
+  });
+
+  it("returns 404 when mapping not found", async () => {
+    vi.mocked(linearProjectManager.removeMapping).mockReturnValue(false);
+
+    const res = await app.request("/api/linear/project-mappings", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repoRoot: "/unknown" }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("removes mapping successfully", async () => {
+    vi.mocked(linearProjectManager.removeMapping).mockReturnValue(true);
+
+    const res = await app.request("/api/linear/project-mappings", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repoRoot: "/home/user/project" }),
+    });
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json).toEqual({ ok: true });
+    expect(linearProjectManager.removeMapping).toHaveBeenCalledWith("/home/user/project");
+  });
+});
 // ─── Git ─────────────────────────────────────────────────────────────────────
 
 describe("GET /api/git/repo-info", () => {
@@ -1893,8 +3050,8 @@ describe("GET /api/sessions/:id/usage-limits", () => {
   it("returns mapped Codex rate limits for a codex session", async () => {
     bridge.getSession.mockReturnValue({ backendType: "codex" });
     bridge.getCodexRateLimits.mockReturnValue({
-      primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1730947200 },
-      secondary: { usedPercent: 10, windowDurationMins: 10080, resetsAt: 1731552000 },
+      primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1730947200 * 1000 },
+      secondary: { usedPercent: 10, windowDurationMins: 10080, resetsAt: 1731552000 * 1000 },
     });
 
     const res = await app.request("/api/sessions/s1/usage-limits", { method: "GET" });
@@ -1922,6 +3079,28 @@ describe("GET /api/sessions/:id/usage-limits", () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json).toEqual({ five_hour: null, seven_day: null, extra_usage: null });
+  });
+
+  it("maps Codex rate limits when bridge still returns second-based timestamps", async () => {
+    bridge.getSession.mockReturnValue({ backendType: "codex" });
+    bridge.getCodexRateLimits.mockReturnValue({
+      // Backward-compat coverage for pre-normalized payloads from bridge/session state.
+      primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1730947200 },
+      secondary: { usedPercent: 10, windowDurationMins: 10080, resetsAt: 1731552000 },
+    });
+
+    const res = await app.request("/api/sessions/s1/usage-limits", { method: "GET" });
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.five_hour).toEqual({
+      utilization: 25,
+      resets_at: new Date(1730947200 * 1000).toISOString(),
+    });
+    expect(json.seven_day).toEqual({
+      utilization: 10,
+      resets_at: new Date(1731552000 * 1000).toISOString(),
+    });
   });
 
   it("handles codex rate limits with null secondary", async () => {
@@ -2008,6 +3187,29 @@ describe("POST /api/sessions/create-stream", () => {
     expect(doneData.cwd).toBe("/test");
   });
 
+  it("passes launch branching controls through to launcher", async () => {
+    const res = await app.request("/api/sessions/create-stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        cwd: "/test",
+        resumeSessionAt: "prior-session-456",
+        forkSession: true,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    await parseSSE(res);
+
+    expect(launcher.launch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: "/test",
+        resumeSessionAt: "prior-session-456",
+        forkSession: true,
+      }),
+    );
+  });
+
   it("emits git progress events when branch is specified", async () => {
     // When branch is specified without useWorktree, should emit fetch/checkout/pull events
     vi.mocked(gitUtils.getRepoInfo).mockReturnValueOnce({
@@ -2033,6 +3235,65 @@ describe("POST /api/sessions/create-stream", () => {
     expect(steps).toContain("checkout_branch");
     expect(steps).toContain("pulling_git");
     expect(steps).toContain("launching_cli");
+  });
+
+  it("creates branch via checkoutOrCreateBranch when createBranch is true", async () => {
+    // Simulates the Linear auto-branch flow: branch doesn't exist yet,
+    // checkoutOrCreateBranch handles try-then-create internally
+    vi.mocked(gitUtils.getRepoInfo).mockReturnValueOnce({
+      repoRoot: "/test",
+      currentBranch: "main",
+      defaultBranch: "main",
+    } as any);
+    vi.mocked(gitUtils.checkoutOrCreateBranch).mockReturnValueOnce({ created: true });
+
+    const res = await app.request("/api/sessions/create-stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd: "/test", branch: "the-138-fix-auth", createBranch: true }),
+    });
+
+    expect(res.status).toBe(200);
+    const events = await parseSSE(res);
+    const steps = events
+      .filter((e) => e.event === "progress")
+      .map((e) => JSON.parse(e.data).step);
+
+    // Should succeed with checkout_branch step
+    expect(steps).toContain("checkout_branch");
+    expect(steps).toContain("launching_cli");
+    expect(gitUtils.checkoutOrCreateBranch).toHaveBeenCalledWith("/test", "the-138-fix-auth", {
+      createBranch: true,
+      defaultBranch: "main",
+    });
+
+    // No error event
+    const errorEvent = events.find((e) => e.event === "error");
+    expect(errorEvent).toBeUndefined();
+  });
+
+  it("emits error when checkoutOrCreateBranch throws and createBranch is not set", async () => {
+    // When checkout fails and createBranch is falsy, checkoutOrCreateBranch throws
+    vi.mocked(gitUtils.getRepoInfo).mockReturnValueOnce({
+      repoRoot: "/test",
+      currentBranch: "main",
+      defaultBranch: "main",
+    } as any);
+    vi.mocked(gitUtils.checkoutOrCreateBranch).mockImplementationOnce(() => {
+      throw new Error('Branch "nonexistent" does not exist. Pass createBranch to create it.');
+    });
+
+    const res = await app.request("/api/sessions/create-stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd: "/test", branch: "nonexistent" }),
+    });
+
+    expect(res.status).toBe(200);
+    const events = await parseSSE(res);
+    const errorEvent = events.find((e) => e.event === "error");
+    expect(errorEvent).toBeDefined();
+    expect(JSON.parse(errorEvent!.data).error).toContain("does not exist");
   });
 
   it("emits worktree progress events when useWorktree is set", async () => {

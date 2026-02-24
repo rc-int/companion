@@ -39,6 +39,7 @@ cd web && bun run test:watch
 ```
 
 - All new backend (`web/server/`) and frontend (`web/src/`) code **must** include tests when possible.
+- **Every new or modified frontend component** (`web/src/components/`) **must** have an accompanying `.test.tsx` file with at minimum: a render test, an axe accessibility scan (`toHaveNoViolations()`), and tests for any interactive behavior (clicks, keyboard shortcuts, state changes).
 - Tests use Vitest. Server tests live alongside source files (e.g. `routes.test.ts` next to `routes.ts`).
 - A husky pre-commit hook runs typecheck and tests automatically before each commit.
 - **Never remove or delete existing tests.** If a test is failing, fix the code or the test. If you believe a test should be removed, you must first explain to the user why and get explicit approval before removing it.
@@ -130,6 +131,12 @@ When submitting a pull request:
 - Add a screenshot of the changes in the PR description if its a visual change
 - Explain simply what the PR does and why it's needed
 - Tell me if the code was reviewed by a human or simply generated directly by an AI. 
+
+## Linear Issues
+
+When creating or updating Linear issues:
+- do not use commitzen-style titles in Linear
+- use clear product-style titles that describe user value/outcome
 
 ### How To Open A PR With GitHub CLI
 

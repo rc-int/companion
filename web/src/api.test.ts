@@ -109,6 +109,53 @@ describe("listSessions", () => {
   });
 });
 
+describe("discoverClaudeSessions", () => {
+  it("sends GET to /api/claude/sessions/discover with limit", async () => {
+    const payload = {
+      sessions: [
+        {
+          sessionId: "ac5b80ba-2927-4f20-84c2-6bbaf9afdeb3",
+          cwd: "/Users/skolte/Github-Private/companion",
+          gitBranch: "main",
+          slug: "snazzy-baking-tarjan",
+          lastActivityAt: 1234,
+          sourceFile: "/Users/skolte/.claude/projects/-Users-skolte-Github-Private-companion/ac5b80ba-2927-4f20-84c2-6bbaf9afdeb3.jsonl",
+        },
+      ],
+    };
+    mockFetch.mockResolvedValueOnce(mockResponse(payload));
+
+    const result = await api.discoverClaudeSessions(250);
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toBe("/api/claude/sessions/discover?limit=250");
+    expect(opts).toBeUndefined();
+    expect(result).toEqual(payload);
+  });
+});
+
+describe("getClaudeSessionHistory", () => {
+  it("sends GET to /api/claude/sessions/:id/history with cursor and limit", async () => {
+    const payload = {
+      sourceFile: "/Users/skolte/.claude/projects/repo/session-1.jsonl",
+      nextCursor: 40,
+      hasMore: true,
+      totalMessages: 120,
+      messages: [],
+    };
+    mockFetch.mockResolvedValueOnce(mockResponse(payload));
+
+    const result = await api.getClaudeSessionHistory("session-1", { cursor: 20, limit: 20 });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toBe("/api/claude/sessions/session-1/history?cursor=20&limit=20");
+    expect(opts).toBeUndefined();
+    expect(result).toEqual(payload);
+  });
+});
+
 // ===========================================================================
 // killSession
 // ===========================================================================
@@ -255,7 +302,7 @@ describe("updateEnv", () => {
 // ===========================================================================
 describe("settings", () => {
   it("sends GET to /api/settings", async () => {
-    const settings = { openrouterApiKeyConfigured: true, openrouterModel: "openrouter/free" };
+    const settings = { openrouterApiKeyConfigured: true, openrouterModel: "openrouter/free", linearApiKeyConfigured: false };
     mockFetch.mockResolvedValueOnce(mockResponse(settings));
 
     const result = await api.getSettings();
@@ -266,15 +313,75 @@ describe("settings", () => {
   });
 
   it("sends PUT to /api/settings", async () => {
-    const settings = { openrouterApiKeyConfigured: true, openrouterModel: "openrouter/free" };
+    const settings = { openrouterApiKeyConfigured: true, openrouterModel: "openrouter/free", linearApiKeyConfigured: true };
     mockFetch.mockResolvedValueOnce(mockResponse(settings));
 
-    await api.updateSettings({ openrouterApiKey: "or-key" });
+    await api.updateSettings({ openrouterApiKey: "or-key", linearApiKey: "lin_api_123" });
 
     const [url, opts] = mockFetch.mock.calls[0];
     expect(url).toBe("/api/settings");
     expect(opts.method).toBe("PUT");
-    expect(JSON.parse(opts.body)).toEqual({ openrouterApiKey: "or-key" });
+    expect(JSON.parse(opts.body)).toEqual({ openrouterApiKey: "or-key", linearApiKey: "lin_api_123" });
+  });
+
+  it("searches Linear issues with query + limit", async () => {
+    const data = { issues: [{ id: "1", identifier: "ENG-1", title: "Fix", description: "", url: "", branchName: "", priorityLabel: "", stateName: "", stateType: "", teamName: "", teamKey: "", teamId: "" }] };
+    mockFetch.mockResolvedValueOnce(mockResponse(data));
+
+    const result = await api.searchLinearIssues("auth bug", 5);
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toBe("/api/linear/issues?query=auth%20bug&limit=5");
+    expect(result).toEqual(data);
+  });
+
+  it("surfaces backend error message for Linear issue search", async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse({ error: "Linear token invalid" }, 502));
+
+    await expect(api.searchLinearIssues("auth bug", 5)).rejects.toThrow("Linear token invalid");
+  });
+
+  it("gets Linear connection status", async () => {
+    const data = {
+      connected: true,
+      viewerName: "Ada",
+      viewerEmail: "ada@example.com",
+      teamName: "Engineering",
+      teamKey: "ENG",
+    };
+    mockFetch.mockResolvedValueOnce(mockResponse(data));
+
+    const result = await api.getLinearConnection();
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toBe("/api/linear/connection");
+    expect(result).toEqual(data);
+  });
+
+  it("transitions a Linear issue", async () => {
+    const data = { ok: true, skipped: false };
+    mockFetch.mockResolvedValueOnce(mockResponse(data));
+
+    const result = await api.transitionLinearIssue("issue-123");
+    const [url, opts] = mockFetch.mock.calls[0];
+    expect(url).toBe("/api/linear/issues/issue-123/transition");
+    expect(opts.method).toBe("POST");
+    expect(JSON.parse(opts.body)).toEqual({});
+    expect(result).toEqual(data);
+  });
+
+  it("surfaces backend error for Linear issue transition", async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse({ error: "Linear transition failed" }, 502));
+
+    await expect(api.transitionLinearIssue("issue-123")).rejects.toThrow("Linear transition failed");
+  });
+
+  it("fetches Linear workflow states", async () => {
+    const data = { teams: [{ id: "t1", key: "ENG", name: "Engineering", states: [{ id: "s1", name: "In Progress", type: "started" }] }] };
+    mockFetch.mockResolvedValueOnce(mockResponse(data));
+
+    const result = await api.getLinearStates();
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toBe("/api/linear/states");
+    expect(result).toEqual(data);
   });
 });
 

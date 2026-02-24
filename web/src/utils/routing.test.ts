@@ -19,6 +19,14 @@ describe("parseHash", () => {
     expect(parseHash("#/settings")).toEqual({ page: "settings" });
   });
 
+  it("parses integrations route", () => {
+    expect(parseHash("#/integrations")).toEqual({ page: "integrations" });
+  });
+
+  it("parses linear integration route", () => {
+    expect(parseHash("#/integrations/linear")).toEqual({ page: "integration-linear" });
+  });
+
   it("parses terminal route", () => {
     expect(parseHash("#/terminal")).toEqual({ page: "terminal" });
   });

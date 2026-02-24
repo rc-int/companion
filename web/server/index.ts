@@ -40,6 +40,7 @@ import { DEFAULT_PORT_DEV, DEFAULT_PORT_PROD } from "./constants.js";
 
 const defaultPort = process.env.NODE_ENV === "production" ? DEFAULT_PORT_PROD : DEFAULT_PORT_DEV;
 const port = Number(process.env.PORT) || defaultPort;
+const idleTimeoutSeconds = Number(process.env.COMPANION_IDLE_TIMEOUT_SECONDS || "120");
 const sessionStore = new SessionStore(process.env.COMPANION_SESSION_DIR);
 const wsBridge = new WsBridge();
 const launcher = new CliLauncher(port);
@@ -80,7 +81,18 @@ wsBridge.onCLIRelaunchNeededCallback(async (sessionId) => {
   if (relaunchingSet.has(sessionId)) return;
   const info = launcher.getSession(sessionId);
   if (info?.archived) return;
-  if (info && info.state !== "starting") {
+  if (!info) {
+    // Orphaned session: WsBridge restored it from disk but launcher has no record.
+    // This happens after server restarts when the session was from a previous lifecycle.
+    console.log(`[server] Session ${sessionId} not found in launcher, cannot relaunch (orphaned)`);
+    relaunchingSet.add(sessionId); // prevent repeated error broadcasts on reconnect
+    wsBridge.broadcastToSession(sessionId, {
+      type: "error",
+      message: "This session's backend process is gone and cannot be relaunched. Please create a new session.",
+    });
+    return;
+  }
+  if (info.state !== "starting") {
     relaunchingSet.add(sessionId);
     console.log(`[server] Auto-relaunching CLI for session ${sessionId}`);
     try {
@@ -100,7 +112,7 @@ wsBridge.onFirstTurnCompletedCallback(async (sessionId, firstUserMessage) => {
   if (sessionNames.getName(sessionId)) return;
   if (!getSettings().openrouterApiKey.trim()) return;
   const info = launcher.getSession(sessionId);
-  const model = info?.model || "claude-sonnet-4-5-20250929";
+  const model = info?.model || "claude-sonnet-4-6";
   console.log(`[server] Auto-naming session ${sessionId} via OpenRouter with model ${model}...`);
   const title = await generateSessionTitle(firstUserMessage, model);
   // Re-check: a manual rename may have occurred while we were generating
@@ -131,6 +143,7 @@ if (process.env.NODE_ENV === "production") {
 const server = Bun.serve<SocketData>({
   hostname: "127.0.0.1",
   port,
+  idleTimeout: idleTimeoutSeconds,
   async fetch(req, server) {
     const url = new URL(req.url);
 
