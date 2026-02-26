@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
+import { getEnrichedPath } from "./path-resolver.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -59,6 +60,7 @@ function git(cmd: string, cwd: string): string {
     encoding: "utf-8",
     timeout: 10_000,
     stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, PATH: getEnrichedPath() },
   }).trim();
 }
 
