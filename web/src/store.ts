@@ -200,6 +200,14 @@ interface AppState {
   markChatTabReentry: (sessionId: string) => void;
   setDiffPanelSelectedFile: (sessionId: string, filePath: string | null) => void;
 
+  // Commit history panel state
+  diffPanelMode: "uncommitted" | "commits";
+  commitSelectedHash: Map<string, string>;
+  commitSelectedFile: Map<string, string>;
+  setDiffPanelMode: (mode: "uncommitted" | "commits") => void;
+  setCommitSelectedHash: (sessionId: string, hash: string | null) => void;
+  setCommitSelectedFile: (sessionId: string, file: string | null) => void;
+
   // Session quick terminal (docked in session workspace)
   quickTerminalOpen: boolean;
   quickTerminalTabs: QuickTerminalTab[];
@@ -341,6 +349,9 @@ export const useStore = create<AppState>((set) => ({
   activeTab: "chat",
   chatTabReentryTickBySession: new Map(),
   diffPanelSelectedFile: new Map(),
+  diffPanelMode: "uncommitted",
+  commitSelectedHash: new Map(),
+  commitSelectedFile: new Map(),
   quickTerminalOpen: false,
   quickTerminalTabs: [],
   activeQuickTerminalTabId: null,
@@ -761,6 +772,28 @@ export const useStore = create<AppState>((set) => ({
       return { diffPanelSelectedFile };
     }),
 
+  setDiffPanelMode: (mode) => set({ diffPanelMode: mode }),
+  setCommitSelectedHash: (sessionId, hash) =>
+    set((s) => {
+      const commitSelectedHash = new Map(s.commitSelectedHash);
+      if (hash) {
+        commitSelectedHash.set(sessionId, hash);
+      } else {
+        commitSelectedHash.delete(sessionId);
+      }
+      return { commitSelectedHash };
+    }),
+  setCommitSelectedFile: (sessionId, file) =>
+    set((s) => {
+      const commitSelectedFile = new Map(s.commitSelectedFile);
+      if (file) {
+        commitSelectedFile.set(sessionId, file);
+      } else {
+        commitSelectedFile.delete(sessionId);
+      }
+      return { commitSelectedFile };
+    }),
+
   setQuickTerminalOpen: (open) => set({ quickTerminalOpen: open }),
   openQuickTerminal: (opts) =>
     set((s) => {
@@ -858,6 +891,9 @@ export const useStore = create<AppState>((set) => ({
       activeTab: "chat" as const,
       chatTabReentryTickBySession: new Map(),
       diffPanelSelectedFile: new Map(),
+      diffPanelMode: "uncommitted" as const,
+      commitSelectedHash: new Map(),
+      commitSelectedFile: new Map(),
       quickTerminalOpen: false,
       quickTerminalTabs: [],
       activeQuickTerminalTabId: null,

@@ -419,3 +419,178 @@ export function getBranchStatus(
   const [behind, ahead] = raw.split(/\s+/).map(Number);
   return { ahead: ahead || 0, behind: behind || 0 };
 }
+
+// ─── Commit History ──────────────────────────────────────────────────────────
+
+export interface GitCommitInfo {
+  hash: string;
+  hashShort: string;
+  subject: string;
+  author: string;
+  date: string;
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+}
+
+export interface GitCommitLogResult {
+  commits: GitCommitInfo[];
+  total: number;
+  scope: "branch" | "all";
+  baseBranch: string;
+}
+
+export interface GitCommitFileInfo {
+  path: string;
+  insertions: number;
+  deletions: number;
+}
+
+export interface GitCommitDetail {
+  hash: string;
+  subject: string;
+  body: string;
+  author: string;
+  date: string;
+  files: GitCommitFileInfo[];
+  diff: string;
+}
+
+/**
+ * Get commit log. Defaults to branch scope (main..HEAD) and falls back to
+ * "recent N" when on the default branch itself.
+ */
+export function getCommitLog(
+  cwd: string,
+  options?: { limit?: number; offset?: number; scope?: "branch" | "all" },
+): GitCommitLogResult {
+  const limit = options?.limit ?? 20;
+  const offset = options?.offset ?? 0;
+  const requestedScope = options?.scope ?? "branch";
+
+  const defaultBranch = resolveDefaultBranch(cwd);
+  const currentBranch = gitSafe("rev-parse --abbrev-ref HEAD", cwd) || "HEAD";
+
+  let scope: "branch" | "all" = requestedScope;
+  let range = "";
+
+  if (scope === "branch" && currentBranch !== defaultBranch && currentBranch !== "HEAD") {
+    // Count total commits in branch range
+    const countRaw = gitSafe(`rev-list --count ${defaultBranch}..HEAD`, cwd);
+    const total = countRaw ? parseInt(countRaw, 10) : 0;
+    range = `${defaultBranch}..HEAD`;
+
+    if (total === 0) {
+      scope = "all";
+    } else {
+      const logRaw = gitSafe(
+        `log ${range} --skip=${offset} -n ${limit} --format=%H|%h|%s|%an|%aI --shortstat`,
+        cwd,
+      );
+      return {
+        commits: parseCommitLog(logRaw || ""),
+        total,
+        scope: "branch",
+        baseBranch: defaultBranch,
+      };
+    }
+  } else {
+    scope = "all";
+  }
+
+  // "all" scope: recent commits
+  const countRaw = gitSafe("rev-list --count HEAD", cwd);
+  const total = countRaw ? parseInt(countRaw, 10) : 0;
+  const logRaw = gitSafe(
+    `log --skip=${offset} -n ${limit} --format=%H|%h|%s|%an|%aI --shortstat`,
+    cwd,
+  );
+  return {
+    commits: parseCommitLog(logRaw || ""),
+    total: Math.min(total, 200), // Cap total for pagination sanity
+    scope: "all",
+    baseBranch: defaultBranch,
+  };
+}
+
+function parseCommitLog(raw: string): GitCommitInfo[] {
+  const commits: GitCommitInfo[] = [];
+  const lines = raw.split("\n");
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i]?.trim();
+    if (!line) { i++; continue; }
+
+    const parts = line.split("|");
+    if (parts.length < 5) { i++; continue; }
+
+    const [hash, hashShort, subject, author, date] = parts;
+    let filesChanged = 0;
+    let insertions = 0;
+    let deletions = 0;
+
+    // Next non-empty line might be --shortstat output
+    i++;
+    while (i < lines.length && lines[i]?.trim() === "") i++;
+    if (i < lines.length) {
+      const statLine = lines[i].trim();
+      const filesMatch = statLine.match(/(\d+) files? changed/);
+      const insMatch = statLine.match(/(\d+) insertions?\(\+\)/);
+      const delMatch = statLine.match(/(\d+) deletions?\(-\)/);
+      if (filesMatch || insMatch || delMatch) {
+        filesChanged = filesMatch ? parseInt(filesMatch[1], 10) : 0;
+        insertions = insMatch ? parseInt(insMatch[1], 10) : 0;
+        deletions = delMatch ? parseInt(delMatch[1], 10) : 0;
+        i++;
+      }
+    }
+
+    commits.push({ hash, hashShort, subject, author, date, filesChanged, insertions, deletions });
+  }
+
+  return commits;
+}
+
+/**
+ * Get details for a single commit: metadata, file list, and optionally
+ * a diff scoped to a single file.
+ */
+export function getCommitDetail(
+  cwd: string,
+  hash: string,
+  file?: string,
+): GitCommitDetail {
+  // Metadata
+  const metaRaw = git(`show ${hash} --format=%H|%s|%b|%an|%aI --no-patch`, cwd);
+  const metaParts = metaRaw.split("|");
+  const commitHash = metaParts[0] || hash;
+  const subject = metaParts[1] || "";
+  const body = metaParts[2] || "";
+  const author = metaParts[3] || "";
+  const date = metaParts[4] || "";
+
+  // File stats
+  const statRaw = gitSafe(`diff-tree --no-commit-id -r --numstat ${hash}`, cwd) || "";
+  const files: GitCommitFileInfo[] = statRaw
+    .split("\n")
+    .filter((l) => l.trim())
+    .map((l) => {
+      const [ins, del, path] = l.split("\t");
+      return {
+        path: path || "",
+        insertions: ins === "-" ? 0 : parseInt(ins, 10) || 0,
+        deletions: del === "-" ? 0 : parseInt(del, 10) || 0,
+      };
+    });
+
+  // Diff
+  let diff = "";
+  if (file) {
+    diff = gitSafe(`show ${hash} -- "${file}"`, cwd) || "";
+  } else {
+    diff = gitSafe(`show ${hash} --format=`, cwd) || "";
+  }
+
+  return { hash: commitHash, subject, body, author, date, files, diff };
+}

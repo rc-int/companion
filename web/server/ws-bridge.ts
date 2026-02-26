@@ -478,6 +478,12 @@ export class WsBridge {
       return;
     }
 
+    // Respond to keepalive pings from browser (not a typed BrowserOutgoingMessage)
+    if ((msg as { type: string }).type === "ping") {
+      if (ws) ws.send(JSON.stringify({ type: "pong" }));
+      return;
+    }
+
     this.routeBrowserMessage(session, msg, ws);
   }
 

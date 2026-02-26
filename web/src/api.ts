@@ -272,6 +272,40 @@ export interface WorktreeCreateResult {
   isNew: boolean;
 }
 
+export interface GitCommitInfo {
+  hash: string;
+  hashShort: string;
+  subject: string;
+  author: string;
+  date: string;
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+}
+
+export interface GitCommitLogResult {
+  commits: GitCommitInfo[];
+  total: number;
+  scope: "branch" | "all";
+  baseBranch: string;
+}
+
+export interface GitCommitFileInfo {
+  path: string;
+  insertions: number;
+  deletions: number;
+}
+
+export interface GitCommitDetail {
+  hash: string;
+  subject: string;
+  body: string;
+  author: string;
+  date: string;
+  files: GitCommitFileInfo[];
+  diff: string;
+}
+
 export interface CompanionEnv {
   name: string;
   slug: string;
@@ -863,4 +897,21 @@ export const api = {
     put<SavedPrompt>(`/prompts/${encodeURIComponent(id)}`, data),
   deletePrompt: (id: string) =>
     del<{ ok: boolean }>(`/prompts/${encodeURIComponent(id)}`),
+
+  // Commit history
+  getCommitLog: (
+    cwd: string,
+    opts?: { limit?: number; offset?: number; scope?: "branch" | "all" },
+  ) => {
+    const params = new URLSearchParams({ cwd });
+    if (opts?.limit != null) params.set("limit", String(opts.limit));
+    if (opts?.offset != null) params.set("offset", String(opts.offset));
+    if (opts?.scope) params.set("scope", opts.scope);
+    return get<GitCommitLogResult>(`/git/log?${params}`);
+  },
+  getCommitDetail: (cwd: string, hash: string, file?: string) => {
+    const params = new URLSearchParams({ cwd, hash });
+    if (file) params.set("file", file);
+    return get<GitCommitDetail>(`/git/show?${params}`);
+  },
 };

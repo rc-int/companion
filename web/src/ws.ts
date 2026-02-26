@@ -6,6 +6,7 @@ import { playNotificationSound } from "./utils/notification-sound.js";
 const WS_RECONNECT_DELAY_MS = 2000;
 const sockets = new Map<string, WebSocket>();
 const reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const pingTimers = new Map<string, ReturnType<typeof setInterval>>();
 const lastSeqBySession = new Map<string, number>();
 const taskCounters = new Map<string, number>();
 const streamingPhaseBySession = new Map<string, "thinking" | "text">();
@@ -368,6 +369,9 @@ function handleMessage(sessionId: string, event: MessageEvent) {
   } catch {
     return;
   }
+
+  // Ignore keepalive pong responses
+  if ((data as { type: string }).type === "pong") return;
 
   // Promote to "connected" on first valid message (proves subscription succeeded)
   const store = useStore.getState();
@@ -813,12 +817,22 @@ export function connectSession(sessionId: string) {
       clearTimeout(timer);
       reconnectTimers.delete(sessionId);
     }
+    // Start keepalive ping every 30s to prevent idle timeout
+    const existingPing = pingTimers.get(sessionId);
+    if (existingPing) clearInterval(existingPing);
+    pingTimers.set(sessionId, setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "ping" }));
+      }
+    }, 30_000));
   };
 
   ws.onmessage = (event) => handleMessage(sessionId, event);
 
   ws.onclose = () => {
     sockets.delete(sessionId);
+    const ping = pingTimers.get(sessionId);
+    if (ping) { clearInterval(ping); pingTimers.delete(sessionId); }
     useStore.getState().setConnectionStatus(sessionId, "disconnected");
     scheduleReconnect(sessionId);
   };
@@ -848,6 +862,8 @@ export function disconnectSession(sessionId: string) {
     clearTimeout(timer);
     reconnectTimers.delete(sessionId);
   }
+  const ping = pingTimers.get(sessionId);
+  if (ping) { clearInterval(ping); pingTimers.delete(sessionId); }
   const ws = sockets.get(sessionId);
   if (ws) {
     ws.close();

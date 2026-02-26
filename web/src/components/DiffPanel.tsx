@@ -2,8 +2,10 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { useStore } from "../store.js";
 import { api } from "../api.js";
 import { DiffViewer } from "./DiffViewer.js";
+import { CommitHistoryPanel } from "./CommitHistoryPanel.js";
 
 type FileChangeStatus = "created" | "updated" | "deleted";
+type DiffPanelMode = "uncommitted" | "commits";
 
 function FileStatusIcon({ status }: { status: FileChangeStatus }) {
   if (status === "created") {
@@ -27,6 +29,46 @@ function FileStatusIcon({ status }: { status: FileChangeStatus }) {
   );
 }
 
+function SegmentedToggle({
+  mode,
+  onModeChange,
+  uncommittedCount,
+}: {
+  mode: DiffPanelMode;
+  onModeChange: (m: DiffPanelMode) => void;
+  uncommittedCount: number;
+}) {
+  return (
+    <div className="flex items-center bg-cc-bg border border-cc-border rounded-lg p-0.5 gap-0.5">
+      <button
+        onClick={() => onModeChange("uncommitted")}
+        className={`flex items-center gap-1.5 px-3 py-1 text-[12px] font-medium rounded-md transition-colors cursor-pointer ${
+          mode === "uncommitted"
+            ? "bg-cc-card text-cc-fg shadow-sm"
+            : "text-cc-muted hover:text-cc-fg"
+        }`}
+      >
+        Uncommitted
+        {uncommittedCount > 0 && (
+          <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold bg-cc-warning/20 text-cc-warning">
+            {uncommittedCount}
+          </span>
+        )}
+      </button>
+      <button
+        onClick={() => onModeChange("commits")}
+        className={`px-3 py-1 text-[12px] font-medium rounded-md transition-colors cursor-pointer ${
+          mode === "commits"
+            ? "bg-cc-card text-cc-fg shadow-sm"
+            : "text-cc-muted hover:text-cc-fg"
+        }`}
+      >
+        Commits
+      </button>
+    </div>
+  );
+}
+
 export function DiffPanel({ sessionId }: { sessionId: string }) {
   const session = useStore((s) => s.sessions.get(sessionId));
   const sdkSession = useStore((s) => s.sdkSessions.find((sdk) => sdk.sessionId === sessionId));
@@ -34,6 +76,8 @@ export function DiffPanel({ sessionId }: { sessionId: string }) {
   const setSelectedFile = useStore((s) => s.setDiffPanelSelectedFile);
   const diffBase = useStore((s) => s.diffBase);
   const setDiffBase = useStore((s) => s.setDiffBase);
+  const diffPanelMode = useStore((s) => s.diffPanelMode);
+  const setDiffPanelMode = useStore((s) => s.setDiffPanelMode);
   // changedFilesTick used only as a refresh trigger (bumped when agent edits files)
   const changedFilesTick = useStore((s) => s.changedFilesTick.get(sessionId) ?? 0);
 
@@ -133,26 +177,49 @@ export function DiffPanel({ sessionId }: { sessionId: string }) {
     );
   }
 
+  // Commits mode — render the commit history panel with toggle header
+  if (diffPanelMode === "commits") {
+    return (
+      <div className="h-full flex flex-col">
+        <div className="shrink-0 flex items-center justify-center px-4 py-2 border-b border-cc-border bg-cc-card">
+          <SegmentedToggle mode={diffPanelMode} onModeChange={setDiffPanelMode} uncommittedCount={relativeChangedFiles.length} />
+        </div>
+        <div className="flex-1 min-h-0">
+          <CommitHistoryPanel sessionId={sessionId} />
+        </div>
+      </div>
+    );
+  }
+
   if (relativeChangedFiles.length === 0) {
     return (
-      <div className="h-full flex flex-col items-center justify-center gap-4 select-none px-6">
-        <div className="w-14 h-14 rounded-2xl bg-cc-card border border-cc-border flex items-center justify-center">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-7 h-7 text-cc-muted">
-            <path d="M12 3v18M3 12h18" strokeLinecap="round" />
-          </svg>
+      <div className="h-full flex flex-col">
+        <div className="shrink-0 flex items-center justify-center px-4 py-2 border-b border-cc-border bg-cc-card">
+          <SegmentedToggle mode={diffPanelMode} onModeChange={setDiffPanelMode} uncommittedCount={0} />
         </div>
-        <div className="text-center">
-          <p className="text-sm text-cc-fg font-medium mb-1">No changes yet</p>
-          <p className="text-xs text-cc-muted leading-relaxed">
-            File changes compared to the base will appear here once the agent edits files.
-          </p>
+        <div className="flex-1 flex flex-col items-center justify-center gap-4 select-none px-6">
+          <div className="w-14 h-14 rounded-2xl bg-cc-card border border-cc-border flex items-center justify-center">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="w-7 h-7 text-cc-muted">
+              <path d="M12 3v18M3 12h18" strokeLinecap="round" />
+            </svg>
+          </div>
+          <div className="text-center">
+            <p className="text-sm text-cc-fg font-medium mb-1">No changes yet</p>
+            <p className="text-xs text-cc-muted leading-relaxed">
+              File changes compared to the base will appear here once the agent edits files.
+            </p>
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="h-full flex bg-cc-bg relative">
+    <div className="h-full flex flex-col">
+      <div className="shrink-0 flex items-center justify-center px-4 py-2 border-b border-cc-border bg-cc-card">
+        <SegmentedToggle mode={diffPanelMode} onModeChange={setDiffPanelMode} uncommittedCount={relativeChangedFiles.length} />
+      </div>
+      <div className="flex-1 min-h-0 flex bg-cc-bg relative">
       {/* Mobile backdrop */}
       {sidebarOpen && (
         <div
@@ -263,6 +330,7 @@ export function DiffPanel({ sessionId }: { sessionId: string }) {
             </div>
           )}
         </div>
+      </div>
       </div>
     </div>
   );

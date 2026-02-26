@@ -76,6 +76,37 @@ export function registerGitRoutes(api: Hono, prPoller?: PRPoller): void {
     return c.json({ ...result, git_ahead, git_behind });
   });
 
+  // ─── Commit history ──────────────────────────────────────────────────────
+
+  api.get("/git/log", (c) => {
+    const cwd = c.req.query("cwd");
+    if (!cwd) return c.json({ error: "cwd required" }, 400);
+    const limit = parseInt(c.req.query("limit") || "20", 10);
+    const offset = parseInt(c.req.query("offset") || "0", 10);
+    const scope = (c.req.query("scope") as "branch" | "all") || "branch";
+    try {
+      return c.json(gitUtils.getCommitLog(cwd, { limit, offset, scope }));
+    } catch (e: unknown) {
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+    }
+  });
+
+  api.get("/git/show", (c) => {
+    const cwd = c.req.query("cwd");
+    const hash = c.req.query("hash");
+    if (!cwd || !hash) return c.json({ error: "cwd and hash required" }, 400);
+    // Validate hash to prevent injection
+    if (!/^[a-f0-9]{4,40}$/i.test(hash)) {
+      return c.json({ error: "Invalid commit hash" }, 400);
+    }
+    const file = c.req.query("file") || undefined;
+    try {
+      return c.json(gitUtils.getCommitDetail(cwd, hash, file));
+    } catch (e: unknown) {
+      return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+    }
+  });
+
   api.get("/git/pr-status", async (c) => {
     const cwd = c.req.query("cwd");
     const branch = c.req.query("branch");
