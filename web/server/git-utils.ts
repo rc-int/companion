@@ -486,7 +486,7 @@ export function getCommitLog(
       scope = "all";
     } else {
       const logRaw = gitSafe(
-        `log ${range} --skip=${offset} -n ${limit} --format=%H|%h|%s|%an|%aI --shortstat`,
+        `log ${range} --skip=${offset} -n ${limit} --format='%H|%h|%s|%an|%aI' --shortstat`,
         cwd,
       );
       return {
@@ -504,7 +504,7 @@ export function getCommitLog(
   const countRaw = gitSafe("rev-list --count HEAD", cwd);
   const total = countRaw ? parseInt(countRaw, 10) : 0;
   const logRaw = gitSafe(
-    `log --skip=${offset} -n ${limit} --format=%H|%h|%s|%an|%aI --shortstat`,
+    `log --skip=${offset} -n ${limit} --format='%H|%h|%s|%an|%aI' --shortstat`,
     cwd,
   );
   return {
@@ -564,7 +564,7 @@ export function getCommitDetail(
   file?: string,
 ): GitCommitDetail {
   // Metadata
-  const metaRaw = git(`show ${hash} --format=%H|%s|%b|%an|%aI --no-patch`, cwd);
+  const metaRaw = git(`show ${hash} --format='%H|%s|%b|%an|%aI' --no-patch`, cwd);
   const metaParts = metaRaw.split("|");
   const commitHash = metaParts[0] || hash;
   const subject = metaParts[1] || "";
@@ -591,7 +591,7 @@ export function getCommitDetail(
   if (file) {
     diff = gitSafe(`show ${hash} -- "${file}"`, cwd) || "";
   } else {
-    diff = gitSafe(`show ${hash} --format=`, cwd) || "";
+    diff = gitSafe(`show ${hash} --format=''`, cwd) || "";
   }
 
   return { hash: commitHash, subject, body, author, date, files, diff };
