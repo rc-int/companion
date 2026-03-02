@@ -34,7 +34,7 @@ describe("analytics", () => {
     const mod = await import("./analytics.js");
 
     expect(mod.initAnalytics()).toBe(false);
-    expect(mod.isAnalyticsEnabled()).toBe(false);
+    // isAnalyticsEnabled is internal; verify analytics is disabled via no-op capture calls
     mod.captureEvent("event");
     mod.captureException(new Error("boom"));
 
@@ -50,7 +50,7 @@ describe("analytics", () => {
     const mod = await import("./analytics.js");
 
     expect(mod.initAnalytics()).toBe(true);
-    expect(mod.isAnalyticsEnabled()).toBe(true);
+    // Analytics is now enabled internally; verify via opt-in call and successful capture below
     expect(posthogOptInMock).toHaveBeenCalled();
 
     expect(posthogInitMock).toHaveBeenCalledWith(
@@ -79,7 +79,7 @@ describe("analytics", () => {
     const mod = await import("./analytics.js");
 
     expect(mod.initAnalytics()).toBe(true);
-    expect(mod.isAnalyticsEnabled()).toBe(false);
+    // Analytics is disabled due to opt-out; verify via opt-out call and no capture below
     expect(posthogOptOutMock).toHaveBeenCalled();
     mod.captureEvent("test_event");
     expect(posthogCaptureMock).not.toHaveBeenCalled();

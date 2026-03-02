@@ -16,7 +16,7 @@ import * as envManager from "./env-manager.js";
 import * as gitUtils from "./git-utils.js";
 import * as sessionNames from "./session-names.js";
 import * as sessionLinearIssues from "./session-linear-issues.js";
-import { containerManager, ContainerManager, type ContainerConfig, type ContainerInfo } from "./container-manager.js";
+import { containerManager, type ContainerConfig, type ContainerInfo } from "./container-manager.js";
 import type { CreationStepId } from "./session-types.js";
 import { hasContainerClaudeAuth } from "./claude-container-auth.js";
 import { hasContainerCodexAuth } from "./codex-container-auth.js";

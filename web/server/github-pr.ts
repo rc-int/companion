@@ -1,4 +1,4 @@
-import { execFileSync, execSync } from "node:child_process";
+import { execSync } from "node:child_process";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -61,28 +61,6 @@ export function _resetGhAvailable() {
 
 const repoSlugCache = new Map<string, { slug: string | null; timestamp: number }>();
 const REPO_SLUG_TTL = 5 * 60_000; // 5 minutes
-
-function getRepoSlug(cwd: string): string | null {
-  const cached = repoSlugCache.get(cwd);
-  if (cached && Date.now() - cached.timestamp < REPO_SLUG_TTL) {
-    return cached.slug;
-  }
-  try {
-    const slug = execSync("gh repo view --json nameWithOwner --jq .nameWithOwner", {
-      cwd,
-      stdio: "pipe",
-      timeout: 10_000,
-    })
-      .toString()
-      .trim();
-    const result = slug || null;
-    repoSlugCache.set(cwd, { slug: result, timestamp: Date.now() });
-    return result;
-  } catch {
-    repoSlugCache.set(cwd, { slug: null, timestamp: Date.now() });
-    return null;
-  }
-}
 
 async function getRepoSlugAsync(cwd: string): Promise<string | null> {
   const cached = repoSlugCache.get(cwd);
@@ -288,46 +266,6 @@ export function parseGraphQLResponse(data: unknown): GitHubPRInfo | null {
       },
     };
   } catch {
-    return null;
-  }
-}
-
-// ─── Main Fetch Function (sync — legacy, used by tests) ─────────────────────
-
-export async function fetchPRInfo(cwd: string, branch: string): Promise<GitHubPRInfo | null> {
-  if (!isGhAvailable()) return null;
-
-  const cacheKey = `${cwd}:${branch}`;
-  const cached = prCache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < cached.ttl) {
-    return cached.data;
-  }
-
-  const slug = getRepoSlug(cwd);
-  if (!slug) {
-    prCache.set(cacheKey, { data: null, timestamp: Date.now(), ttl: PR_CACHE_TTL });
-    return null;
-  }
-
-  const [owner, name] = slug.split("/");
-  if (!owner || !name) return null;
-
-  try {
-    const result = execFileSync(
-      "gh",
-      ["api", "graphql", "-f", `query=${PR_QUERY}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-f", `branch=${branch}`],
-      { cwd, stdio: "pipe", timeout: 15_000 },
-    )
-      .toString()
-      .trim();
-
-    const parsed = JSON.parse(result);
-    const prInfo = parseGraphQLResponse(parsed);
-    const ttl = computeAdaptiveTTL(prInfo);
-    prCache.set(cacheKey, { data: prInfo, timestamp: Date.now(), ttl });
-    return prInfo;
-  } catch {
-    prCache.set(cacheKey, { data: null, timestamp: Date.now(), ttl: PR_CACHE_TTL });
     return null;
   }
 }

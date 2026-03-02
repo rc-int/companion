@@ -5,11 +5,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // ---------------------------------------------------------------------------
 
 const mockExecSync = vi.hoisted(() => vi.fn());
-const mockExecFileSync = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", () => ({
   execSync: mockExecSync,
-  execFileSync: mockExecFileSync,
 }));
 
 // ---------------------------------------------------------------------------
@@ -20,7 +18,6 @@ let mod: typeof import("./github-pr.js");
 beforeEach(async () => {
   vi.resetModules();
   mockExecSync.mockReset();
-  mockExecFileSync.mockReset();
   mod = await import("./github-pr.js");
 });
 
@@ -327,93 +324,6 @@ describe("parseGraphQLResponse", () => {
       },
     };
     const result = mod.parseGraphQLResponse(response);
-    expect(result).toBeNull();
-  });
-});
-
-// ===========================================================================
-// fetchPRInfo
-// ===========================================================================
-describe("fetchPRInfo", () => {
-  it("returns null when gh is not available", async () => {
-    // First call: `which gh` throws
-    mockExecSync.mockImplementation(() => {
-      throw new Error("not found");
-    });
-    const result = await mod.fetchPRInfo("/some/path", "main");
-    expect(result).toBeNull();
-  });
-
-  it("returns parsed PR info on success", async () => {
-    // which gh + gh repo view use execSync; gh api graphql uses execFileSync
-    mockExecSync
-      .mockReturnValueOnce("/opt/homebrew/bin/gh")       // which gh
-      .mockReturnValueOnce("The-Vibe-Company/companion"); // gh repo view
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify(makeGraphQLResponse())); // gh api graphql
-
-    const result = await mod.fetchPRInfo("/project", "feat/dark-mode");
-    expect(result).not.toBeNull();
-    expect(result!.number).toBe(162);
-    expect(result!.state).toBe("OPEN");
-  });
-
-  it("returns null when repo slug cannot be resolved", async () => {
-    mockExecSync
-      .mockReturnValueOnce("/opt/homebrew/bin/gh")  // which gh
-      .mockImplementationOnce(() => { throw new Error("not a gh repo"); }); // gh repo view
-
-    const result = await mod.fetchPRInfo("/not-a-repo", "main");
-    expect(result).toBeNull();
-  });
-
-  it("returns null when graphql query fails", async () => {
-    mockExecSync
-      .mockReturnValueOnce("/opt/homebrew/bin/gh")       // which gh
-      .mockReturnValueOnce("owner/repo");                // gh repo view
-    mockExecFileSync
-      .mockImplementationOnce(() => { throw new Error("timeout"); }); // gh api graphql
-
-    const result = await mod.fetchPRInfo("/project", "main");
-    expect(result).toBeNull();
-  });
-
-  it("returns null when no PR exists for branch", async () => {
-    const emptyResponse = { data: { repository: { pullRequests: { nodes: [] } } } };
-    mockExecSync
-      .mockReturnValueOnce("/opt/homebrew/bin/gh")
-      .mockReturnValueOnce("owner/repo");
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify(emptyResponse));
-
-    const result = await mod.fetchPRInfo("/project", "no-pr-branch");
-    expect(result).toBeNull();
-  });
-
-  it("caches results within TTL", async () => {
-    mockExecSync
-      .mockReturnValueOnce("/opt/homebrew/bin/gh")
-      .mockReturnValueOnce("owner/repo");
-    mockExecFileSync
-      .mockReturnValueOnce(JSON.stringify(makeGraphQLResponse()));
-
-    const first = await mod.fetchPRInfo("/project", "feat/cached");
-    const second = await mod.fetchPRInfo("/project", "feat/cached");
-
-    expect(first).toEqual(second);
-    // which gh (1) + repo view (1) = 2 execSync calls, graphql (1) = 1 execFileSync call
-    expect(mockExecSync).toHaveBeenCalledTimes(2);
-    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
-  });
-
-  it("returns null for malformed JSON response", async () => {
-    mockExecSync
-      .mockReturnValueOnce("/opt/homebrew/bin/gh")
-      .mockReturnValueOnce("owner/repo");
-    mockExecFileSync
-      .mockReturnValueOnce("NOT VALID JSON{{{");
-
-    const result = await mod.fetchPRInfo("/project", "main");
     expect(result).toBeNull();
   });
 });

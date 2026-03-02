@@ -18,7 +18,7 @@ function getPostHogHost(): string {
   return host.trim();
 }
 
-export function isAnalyticsEnabled(): boolean {
+function isAnalyticsEnabled(): boolean {
   return analyticsEnabled;
 }
 
