@@ -74,6 +74,7 @@ const NAV_ITEMS: NavItem[] = [
 ];
 
 export function Sidebar() {
+  const [wilcoVersion, setWilcoVersion] = useState("");
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
   const [showArchived, setShowArchived] = useState(false);
@@ -136,6 +137,13 @@ export function Sidebar() {
     const onHashChange = () => setHash(window.location.hash);
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  // Fetch wilco version once on mount
+  useEffect(() => {
+    fetch("/api/update-check").then((r) => r.json()).then((d) => {
+      if (d.currentVersion) setWilcoVersion(d.currentVersion);
+    }).catch(() => {});
   }, []);
 
   function handleSelectSession(sessionId: string) {
@@ -323,6 +331,7 @@ export function Sidebar() {
         <div className="flex items-center gap-2.5">
           <img src={logoSrc} alt="" className="w-6 h-6" />
           <span className="text-[13px] font-semibold text-cc-fg tracking-tight">The Companion</span>
+          {wilcoVersion && <span className="text-[10px] text-cc-fg/40 font-mono">v{wilcoVersion}</span>}
           <button
             onClick={handleNewSession}
             title="New Session"
