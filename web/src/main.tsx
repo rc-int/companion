@@ -18,3 +18,7 @@ createRoot(document.getElementById("root")!).render(
     </AppErrorBoundary>
   </StrictMode>
 );
+
+// Register Service Worker in production (no-op in dev).
+// Dynamic import ensures SW registration never blocks initial render.
+import("./sw-register.js").catch(() => {});

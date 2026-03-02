@@ -10,16 +10,24 @@ vi.mock("node:fs", async (importOriginal) => {
   return { ...actual, readFileSync: (...args: unknown[]) => mockReadFileSync(...args) };
 });
 
+// Mock settings-manager to control updateChannel
+const mockGetSettings = vi.fn(() => ({
+  updateChannel: "stable" as "stable" | "prerelease",
+}));
+vi.mock("./settings-manager.js", () => ({
+  getSettings: () => mockGetSettings(),
+}));
+
 let checker: typeof import("./update-checker.js");
 
 beforeEach(async () => {
   vi.resetModules();
   mockFetch.mockReset();
   mockReadFileSync.mockReset();
-  // Default: return version "0.1.0" for wilco package.json
   mockReadFileSync.mockImplementation(() => {
     return JSON.stringify({ version: "0.1.0" });
   });
+  mockGetSettings.mockReturnValue({ updateChannel: "stable" });
   checker = await import("./update-checker.js");
 });
 
@@ -27,7 +35,7 @@ afterEach(() => {
   checker.stopPeriodicCheck();
 });
 
-// ── isNewerVersion ──────────────────────────────────────────────────────────
+// ── isNewerVersion (stable) ──────────────────────────────────────────────────
 describe("isNewerVersion", () => {
   it("returns true when major version is higher", () => {
     expect(checker.isNewerVersion("2.0.0", "1.0.0")).toBe(true);
@@ -50,6 +58,79 @@ describe("isNewerVersion", () => {
   });
 });
 
+// ── isNewerVersion (prerelease) ──────────────────────────────────────────────
+describe("isNewerVersion (prerelease)", () => {
+  it("stable is newer than prerelease of same core version", () => {
+    expect(checker.isNewerVersion("1.0.0", "1.0.0-preview.1")).toBe(true);
+  });
+
+  it("prerelease is older than stable of same core version", () => {
+    expect(checker.isNewerVersion("1.0.0-preview.1", "1.0.0")).toBe(false);
+  });
+
+  it("higher core prerelease is newer than lower core stable", () => {
+    expect(checker.isNewerVersion("1.1.0-preview.1", "1.0.0")).toBe(true);
+  });
+
+  it("later prerelease of same core is newer", () => {
+    expect(checker.isNewerVersion("1.0.0-preview.2", "1.0.0-preview.1")).toBe(true);
+  });
+
+  it("earlier prerelease of same core is older", () => {
+    expect(checker.isNewerVersion("1.0.0-preview.1", "1.0.0-preview.2")).toBe(false);
+  });
+
+  it("compares timestamp-based prerelease identifiers correctly", () => {
+    expect(checker.isNewerVersion(
+      "0.66.0-preview.20260228140000.abc1234",
+      "0.66.0-preview.20260228120000.def5678",
+    )).toBe(true);
+  });
+
+  it("returns false for equal prerelease versions", () => {
+    expect(checker.isNewerVersion("1.0.0-preview.1", "1.0.0-preview.1")).toBe(false);
+  });
+
+  it("compares alphanumeric prerelease identifiers lexically", () => {
+    expect(checker.isNewerVersion("1.0.0-beta.1", "1.0.0-alpha.1")).toBe(true);
+    expect(checker.isNewerVersion("1.0.0-alpha.1", "1.0.0-beta.1")).toBe(false);
+  });
+});
+
+// ── Prerelease regressions (THE-216) ────────────────────────────────────────
+describe("isNewerVersion — prerelease channel regressions (THE-216)", () => {
+  it("same-core prerelease is NOT newer than stable (old broken format)", () => {
+    expect(checker.isNewerVersion("0.68.0-preview.20260301120000.abc1234", "0.68.0")).toBe(false);
+  });
+
+  it("patch-bumped prerelease IS newer than stable (fixed format)", () => {
+    expect(checker.isNewerVersion("0.68.1-preview.20260301120000.abc1234", "0.68.0")).toBe(true);
+  });
+
+  it("later timestamp preview is newer than earlier timestamp preview", () => {
+    expect(checker.isNewerVersion(
+      "0.68.1-preview.20260301140000.abc1234",
+      "0.68.1-preview.20260301120000.def5678",
+    )).toBe(true);
+  });
+
+  it("stable release at preview core supersedes the preview", () => {
+    expect(checker.isNewerVersion("0.68.1-preview.20260301120000.abc1234", "0.68.1")).toBe(false);
+  });
+
+  it("higher stable is newer than older-core preview", () => {
+    expect(checker.isNewerVersion("0.69.0", "0.68.1-preview.20260301120000.abc1234")).toBe(true);
+  });
+});
+
+// ── getCurrentVersion ───────────────────────────────────────────────────────
+describe("getCurrentVersion", () => {
+  it("returns a semver string", () => {
+    const version = checker.getCurrentVersion();
+    expect(version).toMatch(/^\d+\.\d+\.\d+/);
+  });
+});
+
 // ── getUpdateState ──────────────────────────────────────────────────────────
 describe("getUpdateState", () => {
   it("returns initial state with currentVersion from package.json", () => {
@@ -58,6 +139,8 @@ describe("getUpdateState", () => {
     expect(state.latestVersion).toBeNull();
     expect(state.upstreamCompanionVersion).toBeNull();
     expect(state.checking).toBe(false);
+    expect(state.updateInProgress).toBe(false);
+    expect(state.channel).toBe("stable");
   });
 });
 
@@ -90,6 +173,7 @@ describe("checkForUpdate", () => {
     expect(state.latestVersion).toBe("0.2.0");
     expect(state.upstreamCompanionVersion).toBe("0.31.0");
     expect(state.lastChecked).toBeGreaterThan(0);
+    expect(state.channel).toBe("stable");
   });
 
   it("handles fetch errors gracefully", async () => {
