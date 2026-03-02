@@ -25,6 +25,9 @@ const INITIAL_DELAY_MS = 10_000; // 10 seconds after boot
 
 // ── State ────────────────────────────────────────────────────────────────────
 
+/** Unique ID per server boot — clients detect restarts by comparing this value. */
+const STARTUP_ID = Date.now().toString();
+
 interface UpdateState {
   currentVersion: string;
   latestVersion: string | null;
@@ -55,6 +58,10 @@ export function getUpdateState(): Readonly<UpdateState> {
 
 export function getCurrentVersion(): string {
   return state.currentVersion;
+}
+
+export function getStartupId(): string {
+  return STARTUP_ID;
 }
 
 export function setServiceMode(isService: boolean): void {

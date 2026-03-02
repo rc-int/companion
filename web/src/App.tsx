@@ -45,7 +45,44 @@ function useHash() {
   );
 }
 
+const SERVER_POLL_INTERVAL_MS = 30_000;
+
+/**
+ * Polls /api/update-check every 30s. If the server's startupId changes
+ * (i.e. the server restarted), automatically reloads the page.
+ */
+function useServerRestart() {
+  const startupIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    function poll() {
+      const token = localStorage.getItem("companion_auth_token");
+      const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+
+      fetch("/api/update-check", { signal: AbortSignal.timeout(5000), headers })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (cancelled || !data?.startupId) return;
+          if (startupIdRef.current === null) {
+            startupIdRef.current = data.startupId;
+          } else if (data.startupId !== startupIdRef.current) {
+            console.log("[auto-refresh] Server restarted, reloading page...");
+            window.location.reload();
+          }
+        })
+        .catch(() => {});
+    }
+
+    poll();
+    const id = setInterval(poll, SERVER_POLL_INTERVAL_MS);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+}
+
 export default function App() {
+  useServerRestart();
   const isAuthenticated = useStore((s) => s.isAuthenticated);
   const darkMode = useStore((s) => s.darkMode);
   const currentSessionId = useStore((s) => s.currentSessionId);

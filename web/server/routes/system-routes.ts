@@ -5,6 +5,7 @@ import type { TerminalManager } from "../terminal-manager.js";
 import { getUsageLimits } from "../usage-limits.js";
 import {
   getUpdateState,
+  getStartupId,
   checkForUpdate,
   isUpdateAvailable,
   setUpdateInProgress,
@@ -73,6 +74,7 @@ export function registerSystemRoutes(
       updateInProgress: state.updateInProgress,
       lastChecked: state.lastChecked,
       channel: state.channel,
+      startupId: getStartupId(),
     });
   });
 
@@ -87,6 +89,7 @@ export function registerSystemRoutes(
       updateInProgress: state.updateInProgress,
       lastChecked: state.lastChecked,
       channel: state.channel,
+      startupId: getStartupId(),
     });
   });
 
