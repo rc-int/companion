@@ -24,6 +24,7 @@ vi.mock("../update-checker.js", () => ({
   checkForUpdate: vi.fn(async () => {}),
   isUpdateAvailable: vi.fn(() => false),
   setUpdateInProgress: vi.fn(),
+  getStartupId: vi.fn(() => "test-startup-id"),
 }));
 
 // ─── Mock service ──────────────────────────────────────────────────────────

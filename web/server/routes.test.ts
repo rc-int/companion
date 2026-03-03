@@ -190,6 +190,7 @@ vi.mock("./update-checker.js", () => ({
   getUpdateState: vi.fn(() => ({ ...mockUpdateCheckerState })),
   checkForUpdate: mockCheckForUpdate,
   isUpdateAvailable: vi.fn(() => false),
+  getStartupId: vi.fn(() => "test-startup-id"),
 }));
 
 // Mock image-pull-manager — default: images are always ready

@@ -233,33 +233,18 @@ beforeEach(() => {
 // ─── Tests ───────────────────────────────────────────────────────
 
 describe("App", () => {
-  describe("auth gate", () => {
-    it("renders LoginPage when not authenticated", () => {
-      // When isAuthenticated is false the auth gate should show LoginPage
-      // and nothing from the main layout should be visible.
-      render(<App />);
-
-      expect(screen.getByTestId("login-page")).toBeInTheDocument();
-      expect(screen.queryByTestId("sidebar")).not.toBeInTheDocument();
-      expect(screen.queryByTestId("topbar")).not.toBeInTheDocument();
-      expect(screen.queryByTestId("home-page")).not.toBeInTheDocument();
-    });
-  });
-
-  describe("authenticated layout", () => {
+  describe("layout", () => {
     beforeEach(() => {
       setStoreValues({ isAuthenticated: true });
     });
 
-    it("renders Sidebar, TopBar, UpdateBanner, and HomePage when on home route with no session", () => {
-      // Authenticated user on the home route (no active session) should see the
-      // full chrome: sidebar, topbar, update banner, and the home page content.
+    it("renders Sidebar, TopBar, and HomePage when on home route with no session", () => {
+      // Home route (no active session) should show the full chrome:
+      // sidebar, topbar, and the home page content.
       render(<App />);
 
-      expect(screen.queryByTestId("login-page")).not.toBeInTheDocument();
       expect(screen.getByTestId("sidebar")).toBeInTheDocument();
       expect(screen.getByTestId("topbar")).toBeInTheDocument();
-      expect(screen.getByTestId("update-banner")).toBeInTheDocument();
       expect(screen.getByTestId("home-page")).toBeInTheDocument();
       expect(screen.getByTestId("update-overlay")).toBeInTheDocument();
     });
@@ -433,8 +418,7 @@ describe("App", () => {
   });
 
   describe("accessibility", () => {
-    it("passes axe accessibility checks when unauthenticated (LoginPage)", async () => {
-      // The login page rendered by the auth gate should have no a11y violations.
+    it("passes axe accessibility checks with default state", async () => {
       const { axe } = await import("vitest-axe");
       const { container } = render(<App />);
       const results = await axe(container);
