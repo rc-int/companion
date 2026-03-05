@@ -194,7 +194,7 @@ if (process.env.NODE_ENV === "production") {
 }
 
 const server = Bun.serve<SocketData>({
-  hostname: "127.0.0.1",
+  hostname: process.env.HOST || "127.0.0.1",
   port,
   idleTimeout: idleTimeoutSeconds,
   async fetch(req, server) {
