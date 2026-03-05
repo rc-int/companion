@@ -117,3 +117,54 @@ describe("POST /hooks/session-start handler", () => {
     );
   });
 });
+
+describe("hook event broadcasting", () => {
+  /** Verifies that SessionStart triggers a WebSocket broadcast to connected browsers */
+  it("calls wsBridge.broadcastToSession on SessionStart", async () => {
+    const broadcastToSession = vi.fn();
+    const app = createTestApp({ wsBridge: { broadcastToSession } });
+    await app.request("/hooks/session-start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(SESSION_START_BODY),
+    });
+    expect(broadcastToSession).toHaveBeenCalledWith(
+      "test-123",
+      expect.objectContaining({
+        type: "hook_event",
+        event: "SessionStart",
+        session_id: "test-123",
+      }),
+    );
+  });
+
+  /** Verifies that SessionEnd triggers a WebSocket broadcast with the reason */
+  it("calls wsBridge.broadcastToSession on SessionEnd", async () => {
+    const broadcastToSession = vi.fn();
+    const app = createTestApp({ wsBridge: { broadcastToSession } });
+    await app.request("/hooks/session-end", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(SESSION_END_BODY),
+    });
+    expect(broadcastToSession).toHaveBeenCalledWith(
+      "test-123",
+      expect.objectContaining({
+        type: "hook_event",
+        event: "SessionEnd",
+        reason: "other",
+      }),
+    );
+  });
+
+  /** Verifies graceful behavior when no wsBridge is provided (standalone mode) */
+  it("works without wsBridge (no deps)", async () => {
+    const app = createTestApp();
+    const res = await app.request("/hooks/session-start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(SESSION_START_BODY),
+    });
+    expect(res.status).toBe(200);
+  });
+});
