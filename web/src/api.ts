@@ -645,6 +645,8 @@ export interface SavedPrompt {
   projectPaths?: string[];
   createdAt: number;
   updatedAt: number;
+  lastEvolvedAt?: number;
+  version?: number;
 }
 
 // ─── Claude Config Browser ──────────────────────────────────────────────────

@@ -17,6 +17,10 @@ export interface SavedPrompt {
   lastUsedAt?: number;
   /** Total number of times this prompt has been used */
   useCount?: number;
+  /** Epoch ms when this prompt was last evolved by the improvement engine */
+  lastEvolvedAt?: number;
+  /** Evolution version (incremented each time the skill is refined) */
+  version?: number;
 }
 
 export interface PromptUpdateFields {
