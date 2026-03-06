@@ -108,15 +108,17 @@ export class WsBridge {
   startKeepalive(): void {
     if (this.keepaliveTimer) return;
     this.keepaliveTimer = setInterval(() => {
-      const ping = JSON.stringify({ type: "ping" });
+      const browserPing = JSON.stringify({ type: "ping" });
+      // CLI expects NDJSON (newline-delimited) and the protocol type "keep_alive"
+      const cliPing = JSON.stringify({ type: "keep_alive" }) + "\n";
       for (const session of this.sessions.values()) {
-        // Ping CLI socket
+        // Ping CLI socket (keep_alive + newline to avoid NDJSON concatenation)
         if (session.cliSocket) {
-          try { session.cliSocket.send(ping); } catch {}
+          try { session.cliSocket.send(cliPing); } catch {}
         }
         // Ping all browser sockets
         for (const ws of session.browserSockets) {
-          try { ws.send(ping); } catch {}
+          try { ws.send(browserPing); } catch {}
         }
       }
     }, WsBridge.SERVER_KEEPALIVE_INTERVAL_MS);

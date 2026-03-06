@@ -3248,3 +3248,40 @@ describe("MCP control messages", () => {
     vi.useRealTimers();
   });
 });
+
+// ─── Keepalive pings ─────────────────────────────────────────────────────────
+
+describe("startKeepalive", () => {
+  it("sends keep_alive with newline to CLI and ping without newline to browser", () => {
+    // The CLI expects NDJSON (newline-delimited JSON) with type "keep_alive",
+    // while browsers expect plain JSON with type "ping". Without the trailing
+    // newline on CLI messages, the CLI's NDJSON parser concatenates adjacent
+    // messages into one line, causing a JSON parse error and a crash (exit 1).
+    vi.useFakeTimers();
+
+    const cli = makeCliSocket("s1");
+    const browser = makeBrowserSocket("s1");
+    bridge.handleCLIOpen(cli, "s1");
+    bridge.handleBrowserOpen(browser, "s1");
+    cli.send.mockClear();
+    browser.send.mockClear();
+
+    bridge.startKeepalive();
+
+    // Advance past the keepalive interval (30s)
+    vi.advanceTimersByTime(30_000);
+
+    // CLI should receive keep_alive with trailing newline
+    expect(cli.send).toHaveBeenCalledTimes(1);
+    const cliMsg = cli.send.mock.calls[0][0] as string;
+    expect(cliMsg).toBe(JSON.stringify({ type: "keep_alive" }) + "\n");
+
+    // Browser should receive ping without trailing newline
+    expect(browser.send).toHaveBeenCalledTimes(1);
+    const browserMsg = browser.send.mock.calls[0][0] as string;
+    expect(browserMsg).toBe(JSON.stringify({ type: "ping" }));
+
+    bridge.stopKeepalive();
+    vi.useRealTimers();
+  });
+});
