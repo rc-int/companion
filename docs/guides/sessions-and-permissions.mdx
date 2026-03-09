@@ -156,7 +156,11 @@ Click the **shield icon** in the session header to toggle AI validation on or of
 
 ### Automatic persistence
 
-Sessions are saved to disk as JSON files in `$TMPDIR/vibe-sessions/`. Writes are debounced to minimize I/O during streaming. The saved state includes the session configuration, message history, task list, permission state, and CLI process PID.
+Sessions are saved to disk as JSON files in `$COMPANION_SESSION_DIR` (default: `$TMPDIR/vibe-sessions/`). Writes are debounced to minimize I/O during streaming. The saved state includes the session configuration, message history, task list, permission state, and CLI process PID.
+
+<Warning>
+On shared machines where multiple users run their own Companion instance, **always** set `COMPANION_SESSION_DIR` to a per-user path (e.g. `~/.companion/sessions`). Without this, all users share the same directory and will see each other's sessions.
+</Warning>
 
 ### What happens on server restart
 

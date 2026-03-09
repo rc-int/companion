@@ -125,7 +125,7 @@ When running as a background service:
 the-companion logs
 ```
 
-When running in foreground, logs print to stdout. Check the session files directly at `$TMPDIR/vibe-sessions/` for raw state inspection.
+When running in foreground, logs print to stdout. Check the session files directly at `$COMPANION_SESSION_DIR` (default: `$TMPDIR/vibe-sessions/`) for raw state inspection. On multi-user machines, always set `COMPANION_SESSION_DIR` to a per-user path to avoid cross-user session leakage.
 
 ## Debugging with protocol recordings
 

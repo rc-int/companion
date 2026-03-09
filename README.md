@@ -95,6 +95,36 @@ Or set a token via environment variable (takes priority over the file):
 COMPANION_AUTH_TOKEN="my-secret-token" bunx the-companion
 ```
 
+## Environment variables
+
+All settings have sensible defaults. Override them as needed for your deployment.
+
+| Variable | Description | Default |
+|---|---|---|
+| `PORT` | Server listen port | `3456` |
+| `COMPANION_SESSION_DIR` | Directory for session JSON files. **Set this on multi-user machines** to avoid cross-user session leakage. | `$TMPDIR/vibe-sessions/` (shared!) |
+| `COMPANION_AUTH_TOKEN` | Auth token (overrides `~/.companion/auth.json`) | Auto-generated |
+| `COMPANION_IDLE_TIMEOUT_SECONDS` | Kill idle CLI processes after N seconds (0 = disabled) | `0` |
+| `COMPANION_RECONNECT_GRACE_MS` | Grace period (ms) for CLI WebSocket reconnection on restart | `30000` |
+| `COMPANION_RECORDINGS_DIR` | Directory for raw protocol recordings | `~/.companion/recordings/` |
+| `COMPANION_RECORD` | Set to `0` or `false` to disable protocol recording | Enabled |
+| `COMPANION_RECORDINGS_MAX_LINES` | Auto-rotate recordings when total lines exceed this | `1000000` |
+| `COMPANION_INIT_SCRIPT_TIMEOUT` | Timeout (ms) for session init scripts | `120000` |
+| `COMPANION_CODEX_TRANSPORT` | Codex transport mode: `ws` or `stdio` | `ws` |
+| `COMPANION_CODEX_CONTAINER_WS_PORT` | Codex container WebSocket port | `4502` |
+| `COMPANION_CONTAINER_SDK_HOST` | SDK host for containerized deployments | `host.docker.internal` |
+| `COMPANION_FORCE_BYPASS_IN_CONTAINER` | Set to `1` to keep `bypassPermissions` in containers | Unset (downgrades to `acceptEdits`) |
+| `COMPANION_EDITOR_PORT` | VS Code editor host port | `13338` |
+
+### Multi-user deployment
+
+On shared machines where multiple users run their own companion instance, **always** set `COMPANION_SESSION_DIR` to a per-user path. Without it, all users share `/tmp/vibe-sessions/` and will see each other's sessions.
+
+```bash
+# In your systemd unit file or shell profile:
+Environment=COMPANION_SESSION_DIR=/home/youruser/.companion/sessions
+```
+
 ## Development
 ```bash
 make dev
