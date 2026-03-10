@@ -20,6 +20,7 @@ import type { SessionStore } from "./session-store.js";
 import type { CodexAdapter } from "./codex-adapter.js";
 import type { RecorderManager } from "./recorder.js";
 import type { CompanionRedisPublisher } from "./redis-publisher.js";
+import { onSessionExit as skillObserverOnExit } from "./skill-observer.js";
 import { resolveSessionGitInfo } from "./session-git-info.js";
 import type {
   Session,
@@ -463,11 +464,64 @@ export class WsBridge {
       timestamp: Date.now(),
     });
 
+    // Skill observer: analyze session for skill gaps (fire-and-forget)
+    this.runSkillObserver(session);
+
     // Cancel any pending permission requests
     for (const [reqId] of session.pendingPermissions) {
       this.broadcastToBrowsers(session, { type: "permission_cancelled", request_id: reqId });
     }
     session.pendingPermissions.clear();
+  }
+
+  /**
+   * Extract session metrics from message history and run skill observer.
+   * Fire-and-forget — never blocks CLI close handling.
+   */
+  private runSkillObserver(session: Session): void {
+    const history = session.messageHistory;
+    if (history.length === 0) return;
+
+    // Extract timestamps from user messages for duration
+    const userMessages = history.filter((m) => m.type === "user_message");
+    const promptCount = userMessages.length;
+
+    // Duration from first to last message timestamp
+    const timestamps = history
+      .map((m) => ("timestamp" in m ? (m as { timestamp?: number }).timestamp : undefined))
+      .filter((t): t is number => typeof t === "number");
+    const durationMinutes =
+      timestamps.length >= 2
+        ? (Math.max(...timestamps) - Math.min(...timestamps)) / 60_000
+        : 0;
+
+    // Tool names from tool_progress messages
+    const toolNames = history
+      .filter((m) => m.type === "tool_progress")
+      .map((m) => (m as { tool_name: string }).tool_name);
+
+    // Error strings from result messages and error messages
+    const errorStrings: string[] = [];
+    for (const m of history) {
+      if (m.type === "result") {
+        const data = (m as { data: { is_error?: boolean; errors?: string[]; result?: string } }).data;
+        if (data.is_error) {
+          if (data.errors) errorStrings.push(...data.errors);
+          else if (data.result) errorStrings.push(data.result);
+        }
+      } else if (m.type === "error") {
+        errorStrings.push((m as { message: string }).message);
+      }
+    }
+
+    skillObserverOnExit(session.id, {
+      durationMinutes,
+      promptCount,
+      errorStrings: errorStrings.slice(0, 20),
+      toolNames,
+    }).catch((err) => {
+      console.warn(`[ws-bridge] Skill observer error:`, (err as Error).message);
+    });
   }
 
   // ── Browser WebSocket handlers ──────────────────────────────────────────
