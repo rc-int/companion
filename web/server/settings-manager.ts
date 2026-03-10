@@ -26,6 +26,10 @@ export interface CompanionSettings {
   aiValidationAutoApprove: boolean;
   aiValidationAutoDeny: boolean;
   updateChannel: UpdateChannel;
+  sessionLifecycle: "manual" | "auto";
+  sessionIdleTimeoutHours: number;
+  sessionAutoRespawn: boolean;
+  sessionHandoffEnabled: boolean;
   updatedAt: number;
 }
 
@@ -48,6 +52,10 @@ let settings: CompanionSettings = {
   aiValidationAutoApprove: true,
   aiValidationAutoDeny: true,
   updateChannel: "stable",
+  sessionLifecycle: "manual",
+  sessionIdleTimeoutHours: 48,
+  sessionAutoRespawn: true,
+  sessionHandoffEnabled: true,
   updatedAt: 0,
 };
 
@@ -70,6 +78,12 @@ function normalize(raw: Partial<CompanionSettings> | null | undefined): Companio
     aiValidationAutoApprove: typeof raw?.aiValidationAutoApprove === "boolean" ? raw.aiValidationAutoApprove : true,
     aiValidationAutoDeny: typeof raw?.aiValidationAutoDeny === "boolean" ? raw.aiValidationAutoDeny : true,
     updateChannel: raw?.updateChannel === "prerelease" ? "prerelease" : "stable",
+    sessionLifecycle: raw?.sessionLifecycle === "auto" ? "auto" : "manual",
+    sessionIdleTimeoutHours: typeof raw?.sessionIdleTimeoutHours === "number" && raw.sessionIdleTimeoutHours > 0
+      ? raw.sessionIdleTimeoutHours
+      : 48,
+    sessionAutoRespawn: typeof raw?.sessionAutoRespawn === "boolean" ? raw.sessionAutoRespawn : true,
+    sessionHandoffEnabled: typeof raw?.sessionHandoffEnabled === "boolean" ? raw.sessionHandoffEnabled : true,
     updatedAt: typeof raw?.updatedAt === "number" ? raw.updatedAt : 0,
   };
 }
@@ -98,7 +112,7 @@ export function getSettings(): CompanionSettings {
 }
 
 export function updateSettings(
-  patch: Partial<Pick<CompanionSettings, "anthropicApiKey" | "anthropicModel" | "linearApiKey" | "linearAutoTransition" | "linearAutoTransitionStateId" | "linearAutoTransitionStateName" | "linearArchiveTransition" | "linearArchiveTransitionStateId" | "linearArchiveTransitionStateName" | "editorTabEnabled" | "aiValidationEnabled" | "aiValidationAutoApprove" | "aiValidationAutoDeny" | "updateChannel">>,
+  patch: Partial<Pick<CompanionSettings, "anthropicApiKey" | "anthropicModel" | "linearApiKey" | "linearAutoTransition" | "linearAutoTransitionStateId" | "linearAutoTransitionStateName" | "linearArchiveTransition" | "linearArchiveTransitionStateId" | "linearArchiveTransitionStateName" | "editorTabEnabled" | "aiValidationEnabled" | "aiValidationAutoApprove" | "aiValidationAutoDeny" | "updateChannel" | "sessionLifecycle" | "sessionIdleTimeoutHours" | "sessionAutoRespawn" | "sessionHandoffEnabled">>,
 ): CompanionSettings {
   ensureLoaded();
   settings = normalize({
@@ -116,6 +130,10 @@ export function updateSettings(
     aiValidationAutoApprove: patch.aiValidationAutoApprove ?? settings.aiValidationAutoApprove,
     aiValidationAutoDeny: patch.aiValidationAutoDeny ?? settings.aiValidationAutoDeny,
     updateChannel: patch.updateChannel ?? settings.updateChannel,
+    sessionLifecycle: patch.sessionLifecycle ?? settings.sessionLifecycle,
+    sessionIdleTimeoutHours: patch.sessionIdleTimeoutHours ?? settings.sessionIdleTimeoutHours,
+    sessionAutoRespawn: patch.sessionAutoRespawn ?? settings.sessionAutoRespawn,
+    sessionHandoffEnabled: patch.sessionHandoffEnabled ?? settings.sessionHandoffEnabled,
     updatedAt: Date.now(),
   });
   persist();

@@ -31,6 +31,7 @@ import { AgentExecutor } from "./agent-executor.js";
 import { migrateCronJobsToAgents } from "./agent-cron-migrator.js";
 import { CompanionRedisPublisher } from "./redis-publisher.js";
 
+import { SessionLifecycleManager } from "./session-lifecycle.js";
 import { startPeriodicCheck } from "./update-checker.js";
 import { imagePullManager } from "./image-pull-manager.js";
 import { isRunningAsService } from "./service.js";
@@ -321,6 +322,11 @@ startPeriodicCheck();
 if (isRunningAsService()) {
   console.log("[server] Running as background service");
 }
+
+// ── Session lifecycle manager — auto-archive idle sessions ────────────────────
+const lifecycleConfig = SessionLifecycleManager.configFromSettings(getSettings());
+const lifecycleManager = new SessionLifecycleManager(launcher, wsBridge, sessionStore, lifecycleConfig);
+lifecycleManager.start();
 
 // ── Graceful shutdown — persist container state ──────────────────────────────
 function gracefulShutdown() {

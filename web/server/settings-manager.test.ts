@@ -39,6 +39,10 @@ describe("settings-manager", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
   });
@@ -85,6 +89,10 @@ describe("settings-manager", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 123,
     });
   });
@@ -138,6 +146,10 @@ describe("settings-manager", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
   });
@@ -188,5 +200,41 @@ describe("settings-manager", () => {
     updateSettings({ updateChannel: "prerelease" });
     const updated = updateSettings({ anthropicModel: "claude-haiku-3" });
     expect(updated.updateChannel).toBe("prerelease");
+  });
+
+  it("updates sessionLifecycle to auto", () => {
+    const updated = updateSettings({ sessionLifecycle: "auto" });
+    expect(updated.sessionLifecycle).toBe("auto");
+  });
+
+  it("defaults sessionLifecycle to manual for invalid values", () => {
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({ sessionLifecycle: "invalid" }),
+      "utf-8",
+    );
+    _resetForTest(settingsPath);
+    expect(getSettings().sessionLifecycle).toBe("manual");
+  });
+
+  it("updates sessionIdleTimeoutHours", () => {
+    const updated = updateSettings({ sessionIdleTimeoutHours: 24 });
+    expect(updated.sessionIdleTimeoutHours).toBe(24);
+  });
+
+  it("defaults sessionIdleTimeoutHours to 48 for invalid values", () => {
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({ sessionIdleTimeoutHours: -1 }),
+      "utf-8",
+    );
+    _resetForTest(settingsPath);
+    expect(getSettings().sessionIdleTimeoutHours).toBe(48);
+  });
+
+  it("updates sessionAutoRespawn and sessionHandoffEnabled", () => {
+    const updated = updateSettings({ sessionAutoRespawn: false, sessionHandoffEnabled: false });
+    expect(updated.sessionAutoRespawn).toBe(false);
+    expect(updated.sessionHandoffEnabled).toBe(false);
   });
 });

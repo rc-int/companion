@@ -83,6 +83,10 @@ vi.mock("./settings-manager.js", () => ({
     aiValidationAutoApprove: true,
     aiValidationAutoDeny: true,
     updateChannel: "stable",
+    sessionLifecycle: "manual",
+    sessionIdleTimeoutHours: 48,
+    sessionAutoRespawn: true,
+    sessionHandoffEnabled: true,
     updatedAt: 0,
   })),
   updateSettings: vi.fn((patch) => ({
@@ -1531,6 +1535,10 @@ describe("POST /api/sessions/:id/archive — Linear transition", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
     const res = await app.request("/api/sessions/s1/archive", {
@@ -1567,6 +1575,10 @@ describe("POST /api/sessions/:id/archive — Linear transition", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
     const res = await app.request("/api/sessions/s1/archive", {
@@ -1596,6 +1608,10 @@ describe("POST /api/sessions/:id/archive — Linear transition", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
     const res = await app.request("/api/sessions/s1/archive", {
@@ -1673,6 +1689,10 @@ describe("GET /api/sessions/:id/archive-info", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
     const res = await app.request("/api/sessions/s1/archive-info", { method: "GET" });
@@ -2039,6 +2059,10 @@ describe("GET /api/settings", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 123,
     });
 
@@ -2078,6 +2102,10 @@ describe("GET /api/settings", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 123,
     });
 
@@ -2119,6 +2147,10 @@ describe("PUT /api/settings", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 456,
     });
 
@@ -2178,6 +2210,10 @@ describe("PUT /api/settings", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 789,
     });
 
@@ -2215,6 +2251,10 @@ describe("PUT /api/settings", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 999,
     });
 
@@ -2420,6 +2460,10 @@ describe("GET /api/linear/issues", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
 
@@ -2445,6 +2489,10 @@ describe("GET /api/linear/issues", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
 
@@ -2524,6 +2572,10 @@ describe("GET /api/linear/issues", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
 
@@ -2610,6 +2662,10 @@ describe("GET /api/linear/issues", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
 
@@ -2661,6 +2717,10 @@ describe("GET /api/linear/connection", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
 
@@ -2686,6 +2746,10 @@ describe("GET /api/linear/connection", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
 
@@ -2734,6 +2798,10 @@ describe("POST /api/linear/issues/:id/transition", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
 
@@ -2764,6 +2832,10 @@ describe("POST /api/linear/issues/:id/transition", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
 
@@ -2793,6 +2865,10 @@ describe("POST /api/linear/issues/:id/transition", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
 
@@ -2823,6 +2899,10 @@ describe("POST /api/linear/issues/:id/transition", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
 
@@ -2888,6 +2968,10 @@ describe("POST /api/linear/issues/:id/transition", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
 
@@ -2932,6 +3016,10 @@ describe("GET /api/linear/projects", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
 
@@ -2957,6 +3045,10 @@ describe("GET /api/linear/projects", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
 
@@ -3013,6 +3105,10 @@ describe("GET /api/linear/project-issues", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
 
@@ -3038,6 +3134,10 @@ describe("GET /api/linear/project-issues", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
 
@@ -3109,6 +3209,10 @@ describe("GET /api/linear/project-issues", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
 

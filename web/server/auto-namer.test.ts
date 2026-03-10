@@ -28,6 +28,10 @@ beforeEach(() => {
     aiValidationAutoApprove: true,
     aiValidationAutoDeny: true,
     updateChannel: "stable",
+    sessionLifecycle: "manual",
+    sessionIdleTimeoutHours: 48,
+    sessionAutoRespawn: true,
+    sessionHandoffEnabled: true,
     updatedAt: 0,
   });
 });
@@ -62,6 +66,10 @@ describe("generateSessionTitle", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
 
@@ -103,6 +111,10 @@ describe("generateSessionTitle", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
     mockFetch.mockResolvedValueOnce({
@@ -173,6 +185,10 @@ describe("generateSessionTitle", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
+      sessionLifecycle: "manual",
+      sessionIdleTimeoutHours: 48,
+      sessionAutoRespawn: true,
+      sessionHandoffEnabled: true,
       updatedAt: 0,
     });
     mockFetch.mockResolvedValueOnce({
