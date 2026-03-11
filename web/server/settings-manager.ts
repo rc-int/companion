@@ -52,7 +52,7 @@ let settings: CompanionSettings = {
   aiValidationAutoApprove: true,
   aiValidationAutoDeny: true,
   updateChannel: "stable",
-  sessionLifecycle: "manual",
+  sessionLifecycle: "auto",
   sessionIdleTimeoutHours: 48,
   sessionAutoRespawn: true,
   sessionHandoffEnabled: true,
@@ -78,7 +78,7 @@ function normalize(raw: Partial<CompanionSettings> | null | undefined): Companio
     aiValidationAutoApprove: typeof raw?.aiValidationAutoApprove === "boolean" ? raw.aiValidationAutoApprove : true,
     aiValidationAutoDeny: typeof raw?.aiValidationAutoDeny === "boolean" ? raw.aiValidationAutoDeny : true,
     updateChannel: raw?.updateChannel === "prerelease" ? "prerelease" : "stable",
-    sessionLifecycle: raw?.sessionLifecycle === "auto" ? "auto" : "manual",
+    sessionLifecycle: raw?.sessionLifecycle === "manual" ? "manual" : "auto",
     sessionIdleTimeoutHours: typeof raw?.sessionIdleTimeoutHours === "number" && raw.sessionIdleTimeoutHours > 0
       ? raw.sessionIdleTimeoutHours
       : 48,

@@ -25,7 +25,6 @@ import { AiValidationBadge } from "./AiValidationBadge.js";
 import { AiValidationToggle } from "./AiValidationToggle.js";
 import type { TaskItem } from "../types.js";
 import type {
-  UpdateInfo,
   GitHubPRInfo,
   LinearIssue,
   LinearComment,
@@ -1670,67 +1669,6 @@ export function Playground() {
           <div className="space-y-4">
             <Card label="Rate limits with token breakdown">
               <CodexPlaygroundDemo />
-            </Card>
-          </div>
-        </Section>
-
-        {/* ─── Update Banner ──────────────────────────────── */}
-        <Section
-          title="Update Banner"
-          description="Notification banner for available updates"
-        >
-          <div className="space-y-4 max-w-3xl">
-            <Card label="Service mode (auto-update)">
-              <PlaygroundUpdateBanner
-                updateInfo={{
-                  currentVersion: "0.22.1",
-                  latestVersion: "0.23.0",
-                  updateAvailable: true,
-                  isServiceMode: true,
-                  updateInProgress: false,
-                  lastChecked: Date.now(),
-                  channel: "stable",
-                }}
-              />
-            </Card>
-            <Card label="Foreground mode (manual)">
-              <PlaygroundUpdateBanner
-                updateInfo={{
-                  currentVersion: "0.22.1",
-                  latestVersion: "0.23.0",
-                  updateAvailable: true,
-                  isServiceMode: false,
-                  updateInProgress: false,
-                  lastChecked: Date.now(),
-                  channel: "stable",
-                }}
-              />
-            </Card>
-            <Card label="Update in progress">
-              <PlaygroundUpdateBanner
-                updateInfo={{
-                  currentVersion: "0.22.1",
-                  latestVersion: "0.23.0",
-                  updateAvailable: true,
-                  isServiceMode: true,
-                  updateInProgress: true,
-                  lastChecked: Date.now(),
-                  channel: "stable",
-                }}
-              />
-            </Card>
-            <Card label="Prerelease channel update">
-              <PlaygroundUpdateBanner
-                updateInfo={{
-                  currentVersion: "0.22.1",
-                  latestVersion: "0.23.0-preview.20260228120000.abc1234",
-                  updateAvailable: true,
-                  isServiceMode: true,
-                  updateInProgress: false,
-                  lastChecked: Date.now(),
-                  channel: "prerelease",
-                }}
-              />
             </Card>
           </div>
         </Section>

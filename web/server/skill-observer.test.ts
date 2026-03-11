@@ -13,14 +13,8 @@ vi.mock('pg', () => {
     query = mockQuery
     end = mockEnd
   }
-  return { default: { Client: MockClient } }
+  return { Client: MockClient }
 })
-
-// Mock settings manager
-vi.mock('./settings-manager.js', () => ({
-  getSettings: vi.fn(() => ({ anthropicApiKey: 'test-key' })),
-  DEFAULT_ANTHROPIC_MODEL: 'claude-haiku-4-5-20251001',
-}))
 
 describe('skill-observer', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>
@@ -41,6 +35,14 @@ describe('skill-observer', () => {
     toolNames: ['Bash', 'Read', 'Bash', 'Edit'],
   }
 
+  /** Helper: build an OpenAI-format proxy response */
+  function proxyResponse(content: string) {
+    return new Response(
+      JSON.stringify({ choices: [{ message: { content } }] }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    )
+  }
+
   it('skips sessions shorter than 5 minutes', async () => {
     const { onSessionExit } = await import('./skill-observer.js')
     await onSessionExit('test-session', { ...baseMetrics, durationMinutes: 3 })
@@ -53,29 +55,16 @@ describe('skill-observer', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
-  it('skips when no API key is configured', async () => {
-    const { getSettings } = await import('./settings-manager.js')
-    ;(getSettings as ReturnType<typeof vi.fn>).mockReturnValueOnce({ anthropicApiKey: '' })
-
-    const { onSessionExit } = await import('./skill-observer.js')
-    await onSessionExit('test-session', baseMetrics)
-    expect(fetchSpy).not.toHaveBeenCalled()
-  })
-
-  it('calls Haiku with correct prompt structure', async () => {
-    fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ content: [{ type: 'text', text: '[]' }] }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    )
+  it('calls CLI proxy with correct prompt structure', async () => {
+    fetchSpy.mockResolvedValueOnce(proxyResponse('[]'))
 
     const { onSessionExit } = await import('./skill-observer.js')
     await onSessionExit('test-session', baseMetrics)
 
     expect(fetchSpy).toHaveBeenCalledTimes(1)
     const [url, opts] = fetchSpy.mock.calls[0]
-    expect(url).toBe('https://api.anthropic.com/v1/messages')
+    // Should call CLI proxy, not Anthropic directly
+    expect(url).toBe('http://localhost:8318/v1/chat/completions')
     const body = JSON.parse(opts!.body as string)
     expect(body.model).toBe('claude-haiku-4-5-20251001')
     expect(body.max_tokens).toBe(500)
@@ -84,16 +73,14 @@ describe('skill-observer', () => {
     expect(body.messages[0].content).toContain('Prompts: 5')
     expect(body.messages[0].content).toContain('Bash: 2')
     expect(body.messages[0].content).toContain('Error: module not found')
+    // Should NOT have Anthropic-specific headers
+    expect(opts!.headers).not.toHaveProperty('x-api-key')
+    expect(opts!.headers).not.toHaveProperty('anthropic-version')
   })
 
-  it('writes gaps to database when Haiku returns them', async () => {
+  it('writes gaps to database when proxy returns them', async () => {
     const gaps = [{ domain: 'docker-compose', signal: 'repeated docker errors', severity: 'high' }]
-    fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ content: [{ type: 'text', text: JSON.stringify(gaps) }] }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    )
+    fetchSpy.mockResolvedValueOnce(proxyResponse(JSON.stringify(gaps)))
 
     const { onSessionExit } = await import('./skill-observer.js')
     await onSessionExit('test-session-abc', baseMetrics)
@@ -106,13 +93,8 @@ describe('skill-observer', () => {
     expect(mockEnd).toHaveBeenCalled()
   })
 
-  it('does not write to DB when Haiku returns empty array', async () => {
-    fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ content: [{ type: 'text', text: '[]' }] }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    )
+  it('does not write to DB when proxy returns empty array', async () => {
+    fetchSpy.mockResolvedValueOnce(proxyResponse('[]'))
 
     const { onSessionExit } = await import('./skill-observer.js')
     await onSessionExit('test-session', baseMetrics)
@@ -120,7 +102,7 @@ describe('skill-observer', () => {
     expect(mockConnect).not.toHaveBeenCalled()
   })
 
-  it('handles Haiku API failure gracefully', async () => {
+  it('handles proxy API failure gracefully', async () => {
     fetchSpy.mockResolvedValueOnce(new Response('Service Unavailable', { status: 503 }))
 
     const { onSessionExit } = await import('./skill-observer.js')
@@ -136,13 +118,8 @@ describe('skill-observer', () => {
     await onSessionExit('test-session', baseMetrics)
   })
 
-  it('handles malformed Haiku response gracefully', async () => {
-    fetchSpy.mockResolvedValueOnce(
-      new Response(JSON.stringify({ content: [{ type: 'text', text: 'not valid json' }] }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
-    )
+  it('handles malformed proxy response gracefully', async () => {
+    fetchSpy.mockResolvedValueOnce(proxyResponse('not valid json'))
 
     const { onSessionExit } = await import('./skill-observer.js')
     // Should not throw

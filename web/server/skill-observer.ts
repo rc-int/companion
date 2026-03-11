@@ -11,10 +11,9 @@
  */
 
 import { userInfo } from 'node:os'
-import pg from 'pg'
-import { getSettings } from './settings-manager.js'
+import { Client as PgClient } from 'pg'
 
-const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages'
+const PROXY_URL = process.env.CLI_PROXY_URL || 'http://localhost:8318'
 const HAIKU_MODEL = 'claude-haiku-4-5-20251001'
 const MIN_DURATION_MINUTES = 5
 const MIN_PROMPT_COUNT = 3
@@ -36,7 +35,7 @@ interface ReflectionGap {
 
 /**
  * Fire-and-forget session exit handler. Never throws.
- * Calls Haiku to analyze session friction, writes gaps to skill_events.
+ * Calls Haiku via CLI proxy to analyze session friction, writes gaps to skill_events.
  */
 export async function onSessionExit(sessionId: string, metrics: SessionMetrics): Promise<void> {
   try {
@@ -45,12 +44,7 @@ export async function onSessionExit(sessionId: string, metrics: SessionMetrics):
       return
     }
 
-    const apiKey = getSettings().anthropicApiKey.trim()
-    if (!apiKey) {
-      return
-    }
-
-    const gaps = await analyzeSession(apiKey, sessionId, metrics)
+    const gaps = await analyzeSession(sessionId, metrics)
     if (gaps.length === 0) return
 
     await writeGapsToDb(sessionId, gaps)
@@ -63,7 +57,6 @@ export async function onSessionExit(sessionId: string, metrics: SessionMetrics):
 }
 
 async function analyzeSession(
-  apiKey: string,
   sessionId: string,
   metrics: SessionMetrics
 ): Promise<ReflectionGap[]> {
@@ -106,32 +99,29 @@ If no clear gaps exist, respond with: []`
   const timer = setTimeout(() => controller.abort(), 15_000)
 
   try {
-    const res = await fetch(ANTHROPIC_URL, {
+    const res = await fetch(`${PROXY_URL}/v1/chat/completions`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: HAIKU_MODEL,
-        max_tokens: 500,
-        temperature: 0,
         messages: [{ role: 'user', content: prompt }],
+        temperature: 0,
+        max_tokens: 500,
       }),
       signal: controller.signal,
     })
 
     if (!res.ok) {
-      console.warn(`[skill-observer] Haiku request failed: ${res.status} ${res.statusText}`)
+      const errText = await res.text().catch(() => '')
+      console.warn(`[skill-observer] Proxy request failed: ${res.status} ${errText.slice(0, 200)}`)
       return []
     }
 
     const data = (await res.json()) as {
-      content?: Array<{ type: string; text?: string }>
+      choices?: Array<{ message?: { content?: string } }>
     }
 
-    const text = data.content?.[0]?.type === 'text' ? (data.content[0].text ?? '') : ''
+    const text = data.choices?.[0]?.message?.content ?? ''
 
     const jsonMatch = text.match(/\[[\s\S]*\]/)
     if (!jsonMatch) return []
@@ -145,9 +135,9 @@ If no clear gaps exist, respond with: []`
     return gaps
   } catch (err) {
     if ((err as Error).name === 'AbortError') {
-      console.warn(`[skill-observer] Haiku call timed out for session ${sid}`)
+      console.warn(`[skill-observer] Proxy call timed out for session ${sid}`)
     } else {
-      console.warn(`[skill-observer] Haiku call failed for session ${sid}:`, (err as Error).message)
+      console.warn(`[skill-observer] Proxy call failed for session ${sid}:`, (err as Error).message)
     }
     return []
   } finally {
@@ -161,7 +151,7 @@ async function writeGapsToDb(sessionId: string, gaps: ReflectionGap[]): Promise<
     process.env.OPC_POSTGRES_URL ||
     'postgresql://claude:claude_dev@localhost:5432/continuous_claude'
 
-  const client = new pg.Client({ connectionString: databaseUrl })
+  const client = new PgClient({ connectionString: databaseUrl })
   try {
     await client.connect()
     const userId = userInfo().username

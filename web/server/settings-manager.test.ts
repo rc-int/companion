@@ -39,7 +39,7 @@ describe("settings-manager", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
-      sessionLifecycle: "manual",
+      sessionLifecycle: "auto",
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
@@ -89,7 +89,7 @@ describe("settings-manager", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
-      sessionLifecycle: "manual",
+      sessionLifecycle: "auto",
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
@@ -146,7 +146,7 @@ describe("settings-manager", () => {
       aiValidationAutoApprove: true,
       aiValidationAutoDeny: true,
       updateChannel: "stable",
-      sessionLifecycle: "manual",
+      sessionLifecycle: "auto",
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
@@ -207,14 +207,14 @@ describe("settings-manager", () => {
     expect(updated.sessionLifecycle).toBe("auto");
   });
 
-  it("defaults sessionLifecycle to manual for invalid values", () => {
+  it("defaults sessionLifecycle to auto for invalid values", () => {
     writeFileSync(
       settingsPath,
       JSON.stringify({ sessionLifecycle: "invalid" }),
       "utf-8",
     );
     _resetForTest(settingsPath);
-    expect(getSettings().sessionLifecycle).toBe("manual");
+    expect(getSettings().sessionLifecycle).toBe("auto");
   });
 
   it("updates sessionIdleTimeoutHours", () => {
