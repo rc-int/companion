@@ -48,9 +48,9 @@ import {
   handleMcpGetStatus,
   handleMcpToggle,
   handleMcpReconnect,
-  handleMcpSetServers,
-  handleMcpDeleteFileServer,
-  handleMcpEditFileServer,
+  handleMcpAddServer,
+  handleMcpRemoveServer,
+  handleMcpEditServer,
 } from "./ws-bridge-controls.js";
 import {
   handleSessionSubscribe,
@@ -75,10 +75,10 @@ export class WsBridge {
     "mcp_get_status",
     "mcp_toggle",
     "mcp_reconnect",
-    "mcp_set_servers",
+    "mcp_add_server",
+    "mcp_remove_server",
+    "mcp_edit_server",
     "set_ai_validation",
-    "mcp_delete_file_server",
-    "mcp_edit_file_server",
   ]);
   private static readonly SERVER_KEEPALIVE_INTERVAL_MS = 30_000;
   private sessions = new Map<string, Session>();
@@ -211,6 +211,7 @@ export class WsBridge {
         processedClientMessageIdSet: new Set(
           Array.isArray(p.processedClientMessageIds) ? p.processedClientMessageIds : [],
         ),
+        lastMcpServers: [],
       };
       session.state.backend_type = session.backendType;
       // Resolve git info for restored sessions (may have been persisted without it)
@@ -311,6 +312,7 @@ export class WsBridge {
         lastAckSeq: 0,
         processedClientMessageIds: [],
         processedClientMessageIdSet: new Set(),
+        lastMcpServers: [],
       };
       this.sessions.set(sessionId, session);
     } else if (backendType) {
@@ -619,7 +621,9 @@ export class WsBridge {
       console.error(`[ws-bridge] Cannot inject MCP servers: session ${sessionId} not found`);
       return;
     }
-    this.routeBrowserMessage(session, { type: "mcp_set_servers", servers });
+    for (const [name, config] of Object.entries(servers)) {
+      this.routeBrowserMessage(session, { type: "mcp_add_server", serverName: name, config });
+    }
   }
 
   handleBrowserClose(ws: ServerWebSocket<SocketData>) {
@@ -1219,24 +1223,11 @@ export class WsBridge {
         );
         break;
 
-      case "mcp_set_servers":
-        handleMcpSetServers(
-          (request) => sendControlRequest(session, request, this.sendToCLI.bind(this)),
-          msg.servers,
-          () =>
-            handleMcpGetStatus(
-              session,
-              (request, onResponse) => sendControlRequest(session, request, this.sendToCLI.bind(this), onResponse),
-              this.broadcastToBrowsers.bind(this),
-            ),
-        );
-        break;
-
-      case "mcp_delete_file_server":
-        handleMcpDeleteFileServer(
+      case "mcp_add_server":
+        handleMcpAddServer(
           session,
           msg.serverName,
-          msg.scope,
+          msg.config as unknown as Record<string, unknown>,
           (request) => sendControlRequest(session, request, this.sendToCLI.bind(this)),
           () =>
             handleMcpGetStatus(
@@ -1247,12 +1238,25 @@ export class WsBridge {
         );
         break;
 
-      case "mcp_edit_file_server":
-        handleMcpEditFileServer(
+      case "mcp_remove_server":
+        handleMcpRemoveServer(
           session,
           msg.serverName,
-          msg.scope,
-          msg.config as Record<string, unknown>,
+          (request) => sendControlRequest(session, request, this.sendToCLI.bind(this)),
+          () =>
+            handleMcpGetStatus(
+              session,
+              (request, onResponse) => sendControlRequest(session, request, this.sendToCLI.bind(this), onResponse),
+              this.broadcastToBrowsers.bind(this),
+            ),
+        );
+        break;
+
+      case "mcp_edit_server":
+        handleMcpEditServer(
+          session,
+          msg.serverName,
+          msg.config as unknown as Record<string, unknown>,
           (request) => sendControlRequest(session, request, this.sendToCLI.bind(this)),
           () =>
             handleMcpGetStatus(

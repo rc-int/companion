@@ -260,10 +260,10 @@ export type BrowserOutgoingMessage =
   | { type: "mcp_get_status"; client_msg_id?: string }
   | { type: "mcp_toggle"; serverName: string; enabled: boolean; client_msg_id?: string }
   | { type: "mcp_reconnect"; serverName: string; client_msg_id?: string }
-  | { type: "mcp_set_servers"; servers: Record<string, McpServerConfig>; client_msg_id?: string }
-  | { type: "set_ai_validation"; aiValidationEnabled?: boolean | null; aiValidationAutoApprove?: boolean | null; aiValidationAutoDeny?: boolean | null; client_msg_id?: string }
-  | { type: "mcp_delete_file_server"; serverName: string; scope: string; client_msg_id?: string }
-  | { type: "mcp_edit_file_server"; serverName: string; scope: string; config: McpServerConfig; client_msg_id?: string };
+  | { type: "mcp_add_server"; serverName: string; config: McpServerConfig; client_msg_id?: string }
+  | { type: "mcp_remove_server"; serverName: string; client_msg_id?: string }
+  | { type: "mcp_edit_server"; serverName: string; config: McpServerConfig; client_msg_id?: string }
+  | { type: "set_ai_validation"; aiValidationEnabled?: boolean | null; aiValidationAutoApprove?: boolean | null; aiValidationAutoDeny?: boolean | null; client_msg_id?: string };
 
 /** Messages the bridge sends to the browser */
 export type BrowserIncomingMessageBase =

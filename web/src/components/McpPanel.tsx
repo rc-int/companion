@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../store.js";
-import { sendMcpGetStatus, sendMcpToggle, sendMcpReconnect, sendMcpSetServers, sendMcpDeleteFileServer, sendMcpEditFileServer } from "../ws.js";
+import { sendMcpGetStatus, sendMcpToggle, sendMcpReconnect, sendMcpAddServer, sendMcpRemoveServer, sendMcpEditServer } from "../ws.js";
 import type { McpServerDetail, McpServerConfig } from "../types.js";
 
 const EMPTY_SERVERS: McpServerDetail[] = [];
@@ -17,18 +17,13 @@ const DEFAULT_STATUS = { label: "Unknown", badge: "text-cc-muted bg-cc-hover", d
 /** Scopes where edit/delete buttons are hidden (externally managed) */
 const UNMANAGEABLE_SCOPES = new Set(["claudeai"]);
 
-/** Scopes stored in settings files on disk (not managed via mcp_set_servers SDK) */
-const FILE_SCOPES = new Set(["project", "user", "local"]);
-
 function McpServerRow({
   server,
   sessionId,
-  allServers,
   onEdit,
 }: {
   server: McpServerDetail;
   sessionId: string;
-  allServers: McpServerDetail[];
   onEdit: (name: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -96,8 +91,7 @@ function McpServerRow({
             </button>
           )}
 
-          {/* Edit + Remove — only for dynamically-managed servers (scope "managed").
-              File-based (project/user/local) and claudeai servers can't be managed via mcp_set_servers. */}
+          {/* Edit + Remove — hidden for claudeai servers (externally managed) */}
           {canManage && (
             <>
               <button
@@ -111,19 +105,7 @@ function McpServerRow({
               </button>
 
               <button
-                onClick={() => {
-                  if (FILE_SCOPES.has(server.scope)) {
-                    sendMcpDeleteFileServer(sessionId, server.name, server.scope);
-                  } else {
-                    const remaining = allServers
-                      .filter((s) => s.name !== server.name && s.scope === "managed")
-                      .reduce<Record<string, McpServerConfig>>((acc, s) => {
-                        acc[s.name] = s.config as McpServerConfig;
-                        return acc;
-                      }, {});
-                    sendMcpSetServers(sessionId, remaining);
-                  }
-                }}
+                onClick={() => sendMcpRemoveServer(sessionId, server.name)}
                 className="w-6 h-6 flex items-center justify-center rounded-md text-cc-muted hover:text-cc-error hover:bg-cc-error/10 transition-colors cursor-pointer"
                 title="Remove server"
               >
@@ -210,19 +192,15 @@ type ServerType = "stdio" | "sse" | "http";
 function ServerForm({
   sessionId,
   onDone,
-  allServers,
   initialName,
   initialConfig,
   editMode,
-  scope,
 }: {
   sessionId: string;
   onDone: () => void;
-  allServers?: McpServerDetail[];
   initialName?: string;
   initialConfig?: McpServerConfig;
   editMode?: boolean;
-  scope?: string;
 }) {
   const [name, setName] = useState(initialName ?? "");
   const [serverType, setServerType] = useState<ServerType>(
@@ -248,23 +226,10 @@ function ServerForm({
       config.url = url.trim();
     }
 
-    if (editMode && allServers) {
-      if (scope && FILE_SCOPES.has(scope)) {
-        sendMcpEditFileServer(sessionId, name.trim(), scope, config);
-      } else {
-        const serverMap = allServers
-          .filter((s) => s.scope === "managed")
-          .reduce<Record<string, McpServerConfig>>(
-            (acc, s) => {
-              acc[s.name] = s.name === name.trim() ? config : (s.config as McpServerConfig);
-              return acc;
-            },
-            {},
-          );
-        sendMcpSetServers(sessionId, serverMap);
-      }
+    if (editMode) {
+      sendMcpEditServer(sessionId, name.trim(), config);
     } else {
-      sendMcpSetServers(sessionId, { [name.trim()]: config });
+      sendMcpAddServer(sessionId, name.trim(), config);
     }
     onDone();
   }
@@ -479,7 +444,6 @@ export function McpSection({ sessionId }: { sessionId: string }) {
               <McpServerRow
                 server={server}
                 sessionId={sessionId}
-                allServers={displayServers}
                 onEdit={(name) => {
                   setEditingServer(name);
                   setShowAddForm(false);
@@ -490,11 +454,9 @@ export function McpSection({ sessionId }: { sessionId: string }) {
                   <ServerForm
                     sessionId={sessionId}
                     onDone={() => setEditingServer(null)}
-                    allServers={displayServers}
                     initialName={server.name}
                     initialConfig={server.config as McpServerConfig}
                     editMode
-                    scope={server.scope}
                   />
                 </div>
               )}

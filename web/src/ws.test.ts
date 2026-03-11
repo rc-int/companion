@@ -1457,23 +1457,53 @@ describe("MCP status messages", () => {
     expect(typeof sent.client_msg_id).toBe("string");
   });
 
-  it("sendMcpSetServers: sends mcp_set_servers message", () => {
+  it("sendMcpAddServer: sends mcp_add_server message", () => {
     wsModule.connectSession("s1");
     lastWs.send.mockClear();
 
-    const servers = {
-      "notes-server": {
-        type: "stdio" as const,
-        command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-memory"],
-      },
+    const config = {
+      type: "stdio" as const,
+      command: "npx",
+      args: ["-y", "@modelcontextprotocol/server-memory"],
     };
-    wsModule.sendMcpSetServers("s1", servers);
+    wsModule.sendMcpAddServer("s1", "notes-server", config);
 
     expect(lastWs.send).toHaveBeenCalledTimes(1);
     const sent = JSON.parse(lastWs.send.mock.calls[0][0]);
-    expect(sent.type).toBe("mcp_set_servers");
-    expect(sent.servers).toEqual(servers);
+    expect(sent.type).toBe("mcp_add_server");
+    expect(sent.serverName).toBe("notes-server");
+    expect(sent.config).toEqual(config);
+    expect(typeof sent.client_msg_id).toBe("string");
+  });
+
+  it("sendMcpRemoveServer: sends mcp_remove_server message", () => {
+    wsModule.connectSession("s1");
+    lastWs.send.mockClear();
+
+    wsModule.sendMcpRemoveServer("s1", "notes-server");
+
+    expect(lastWs.send).toHaveBeenCalledTimes(1);
+    const sent = JSON.parse(lastWs.send.mock.calls[0][0]);
+    expect(sent.type).toBe("mcp_remove_server");
+    expect(sent.serverName).toBe("notes-server");
+    expect(typeof sent.client_msg_id).toBe("string");
+  });
+
+  it("sendMcpEditServer: sends mcp_edit_server message", () => {
+    wsModule.connectSession("s1");
+    lastWs.send.mockClear();
+
+    const config = {
+      type: "sse" as const,
+      url: "http://localhost:3000/mcp",
+    };
+    wsModule.sendMcpEditServer("s1", "notes-server", config);
+
+    expect(lastWs.send).toHaveBeenCalledTimes(1);
+    const sent = JSON.parse(lastWs.send.mock.calls[0][0]);
+    expect(sent.type).toBe("mcp_edit_server");
+    expect(sent.serverName).toBe("notes-server");
+    expect(sent.config).toEqual(config);
     expect(typeof sent.client_msg_id).toBe("string");
   });
 });

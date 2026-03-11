@@ -599,7 +599,9 @@ export class CodexAdapter {
         || msg.type === "mcp_get_status"
         || msg.type === "mcp_toggle"
         || msg.type === "mcp_reconnect"
-        || msg.type === "mcp_set_servers"
+        || msg.type === "mcp_add_server"
+        || msg.type === "mcp_remove_server"
+        || msg.type === "mcp_edit_server"
       ) {
         console.log(`[codex-adapter] Queuing ${msg.type} — adapter not yet initialized`);
         this.pendingOutgoing.push(msg);
@@ -673,8 +675,14 @@ export class CodexAdapter {
       case "mcp_reconnect":
         this.handleOutgoingMcpReconnect();
         return true;
-      case "mcp_set_servers":
-        this.handleOutgoingMcpSetServers(msg.servers);
+      case "mcp_add_server":
+        this.handleOutgoingMcpAddServer(msg.serverName, msg.config);
+        return true;
+      case "mcp_remove_server":
+        this.handleOutgoingMcpRemoveServer(msg.serverName);
+        return true;
+      case "mcp_edit_server":
+        this.handleOutgoingMcpEditServer(msg.serverName, msg.config);
         return true;
       default:
         return false;
@@ -1126,28 +1134,51 @@ export class CodexAdapter {
     }
   }
 
-  private async handleOutgoingMcpSetServers(servers: Record<string, McpServerConfig>): Promise<void> {
+  private async handleOutgoingMcpAddServer(serverName: string, config: McpServerConfig): Promise<void> {
     try {
-      const edits: Array<{ keyPath: string; value: Record<string, unknown>; mergeStrategy: "upsert" }> = [];
-      for (const [name, config] of Object.entries(servers)) {
-        if (name.includes(".")) {
-          throw new Error(`Server names containing '.' are not supported: ${name}`);
-        }
-        edits.push({
-          keyPath: `mcp_servers.${name}`,
-          value: this.fromMcpServerConfig(config),
-          mergeStrategy: "upsert",
-        });
+      if (serverName.includes(".")) {
+        throw new Error(`Server names containing '.' are not supported: ${serverName}`);
       }
-      if (edits.length > 0) {
-        await this.transport.call("config/batchWrite", {
-          edits,
-        });
-      }
+      await this.transport.call("config/value/write", {
+        keyPath: `mcp_servers.${serverName}`,
+        value: this.fromMcpServerConfig(config),
+        mergeStrategy: "upsert",
+      });
       await this.reloadMcpServers();
       await this.handleOutgoingMcpGetStatus();
     } catch (err) {
-      this.emit({ type: "error", message: `Failed to configure MCP servers: ${err}` });
+      this.emit({ type: "error", message: `Failed to add MCP server "${serverName}": ${err}` });
+    }
+  }
+
+  private async handleOutgoingMcpRemoveServer(serverName: string): Promise<void> {
+    try {
+      await this.transport.call("config/value/write", {
+        keyPath: `mcp_servers.${serverName}`,
+        value: null,
+        mergeStrategy: "replace",
+      });
+      await this.reloadMcpServers();
+      await this.handleOutgoingMcpGetStatus();
+    } catch (err) {
+      this.emit({ type: "error", message: `Failed to remove MCP server "${serverName}": ${err}` });
+    }
+  }
+
+  private async handleOutgoingMcpEditServer(serverName: string, config: McpServerConfig): Promise<void> {
+    try {
+      if (serverName.includes(".")) {
+        throw new Error(`Server names containing '.' are not supported: ${serverName}`);
+      }
+      await this.transport.call("config/value/write", {
+        keyPath: `mcp_servers.${serverName}`,
+        value: this.fromMcpServerConfig(config),
+        mergeStrategy: "replace",
+      });
+      await this.reloadMcpServers();
+      await this.handleOutgoingMcpGetStatus();
+    } catch (err) {
+      this.emit({ type: "error", message: `Failed to edit MCP server "${serverName}": ${err}` });
     }
   }
 

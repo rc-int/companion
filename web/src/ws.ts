@@ -320,10 +320,10 @@ const IDEMPOTENT_OUTGOING_TYPES = new Set<BrowserOutgoingMessage["type"]>([
   "mcp_get_status",
   "mcp_toggle",
   "mcp_reconnect",
-  "mcp_set_servers",
+  "mcp_add_server",
+  "mcp_remove_server",
+  "mcp_edit_server",
   "set_ai_validation",
-  "mcp_delete_file_server",
-  "mcp_edit_file_server",
 ]);
 
 function getWsUrl(sessionId: string): string {
@@ -1045,10 +1045,10 @@ export function sendToSession(sessionId: string, msg: BrowserOutgoingMessage) {
       case "mcp_get_status":
       case "mcp_toggle":
       case "mcp_reconnect":
-      case "mcp_set_servers":
+      case "mcp_add_server":
+      case "mcp_remove_server":
+      case "mcp_edit_server":
       case "set_ai_validation":
-      case "mcp_delete_file_server":
-      case "mcp_edit_file_server":
         if (!msg.client_msg_id) {
           outgoing = { ...msg, client_msg_id: nextClientMsgId() };
         }
@@ -1072,8 +1072,16 @@ export function sendMcpReconnect(sessionId: string, serverName: string) {
   sendToSession(sessionId, { type: "mcp_reconnect", serverName });
 }
 
-export function sendMcpSetServers(sessionId: string, servers: Record<string, McpServerConfig>) {
-  sendToSession(sessionId, { type: "mcp_set_servers", servers });
+export function sendMcpAddServer(sessionId: string, serverName: string, config: McpServerConfig) {
+  sendToSession(sessionId, { type: "mcp_add_server", serverName, config });
+}
+
+export function sendMcpRemoveServer(sessionId: string, serverName: string) {
+  sendToSession(sessionId, { type: "mcp_remove_server", serverName });
+}
+
+export function sendMcpEditServer(sessionId: string, serverName: string, config: McpServerConfig) {
+  sendToSession(sessionId, { type: "mcp_edit_server", serverName, config });
 }
 
 export function sendSetAiValidation(
@@ -1085,14 +1093,6 @@ export function sendSetAiValidation(
   },
 ) {
   sendToSession(sessionId, { type: "set_ai_validation", ...settings });
-}
-
-export function sendMcpDeleteFileServer(sessionId: string, serverName: string, scope: string) {
-  sendToSession(sessionId, { type: "mcp_delete_file_server", serverName, scope });
-}
-
-export function sendMcpEditFileServer(sessionId: string, serverName: string, scope: string, config: McpServerConfig) {
-  sendToSession(sessionId, { type: "mcp_edit_file_server", serverName, scope, config });
 }
 
 // ── Visibility-based reconnect ──────────────────────────────────────────────

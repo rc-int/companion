@@ -8,7 +8,7 @@
  *
  * This file merges two test suites:
  * - Upstream suite: broad functional/accessibility coverage using resetStore (session "s1")
- * - Feature suite: scope-gating and file-scope delete/edit tests using mockServers (session "test-session")
+ * - Feature suite: scope-gating and remove/edit tests using mockServers (session "test-session")
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
@@ -20,17 +20,17 @@ import type { McpServerDetail } from "../types.js";
 const mockSendMcpGetStatus = vi.fn();
 const mockSendMcpToggle = vi.fn();
 const mockSendMcpReconnect = vi.fn();
-const mockSendMcpSetServers = vi.fn();
-const mockSendMcpDeleteFileServer = vi.fn();
-const mockSendMcpEditFileServer = vi.fn();
+const mockSendMcpAddServer = vi.fn();
+const mockSendMcpRemoveServer = vi.fn();
+const mockSendMcpEditServer = vi.fn();
 
 vi.mock("../ws.js", () => ({
   sendMcpGetStatus: (...args: unknown[]) => mockSendMcpGetStatus(...args),
   sendMcpToggle: (...args: unknown[]) => mockSendMcpToggle(...args),
   sendMcpReconnect: (...args: unknown[]) => mockSendMcpReconnect(...args),
-  sendMcpSetServers: (...args: unknown[]) => mockSendMcpSetServers(...args),
-  sendMcpDeleteFileServer: (...args: unknown[]) => mockSendMcpDeleteFileServer(...args),
-  sendMcpEditFileServer: (...args: unknown[]) => mockSendMcpEditFileServer(...args),
+  sendMcpAddServer: (...args: unknown[]) => mockSendMcpAddServer(...args),
+  sendMcpRemoveServer: (...args: unknown[]) => mockSendMcpRemoveServer(...args),
+  sendMcpEditServer: (...args: unknown[]) => mockSendMcpEditServer(...args),
 }));
 
 // ─── Store mock ──────────────────────────────────────────────────────────────
@@ -261,8 +261,8 @@ describe("McpSection add server form", () => {
     expect(screen.queryByText("Command")).not.toBeInTheDocument();
   });
 
-  it("submit calls sendMcpSetServers with stdio config", () => {
-    // Submitting a valid stdio form should call the WS function with correct config
+  it("submit calls sendMcpAddServer with stdio config", () => {
+    // Submitting a valid stdio form should call sendMcpAddServer(sessionId, name, config)
     render(<McpSection sessionId="s1" />);
     fireEvent.click(screen.getByTitle("Add MCP server"));
 
@@ -279,17 +279,15 @@ describe("McpSection add server form", () => {
 
     fireEvent.click(screen.getByText("Add Server"));
 
-    expect(mockSendMcpSetServers).toHaveBeenCalledWith("s1", {
-      "my-new-server": {
-        type: "stdio",
-        command: "npx",
-        args: ["-y", "@mcp/server"],
-      },
+    expect(mockSendMcpAddServer).toHaveBeenCalledWith("s1", "my-new-server", {
+      type: "stdio",
+      command: "npx",
+      args: ["-y", "@mcp/server"],
     });
   });
 
-  it("submit calls sendMcpSetServers with sse config", () => {
-    // Submitting a valid sse form should call with url instead of command
+  it("submit calls sendMcpAddServer with sse config", () => {
+    // Submitting a valid sse form should call sendMcpAddServer with url config
     render(<McpSection sessionId="s1" />);
     fireEvent.click(screen.getByTitle("Add MCP server"));
 
@@ -303,11 +301,9 @@ describe("McpSection add server form", () => {
 
     fireEvent.click(screen.getByText("Add Server"));
 
-    expect(mockSendMcpSetServers).toHaveBeenCalledWith("s1", {
-      "remote-server": {
-        type: "sse",
-        url: "http://example.com/mcp",
-      },
+    expect(mockSendMcpAddServer).toHaveBeenCalledWith("s1", "remote-server", {
+      type: "sse",
+      url: "http://example.com/mcp",
     });
   });
 
@@ -582,9 +578,8 @@ describe("McpPanel remove button", () => {
     expect(screen.getByTitle("Edit server")).toBeTruthy();
   });
 
-  it("remove sends mcp_set_servers with only remaining managed servers", () => {
-    // Mix of managed and non-managed servers — removing a managed one should
-    // only filter managed servers in the payload; file-based are excluded.
+  it("remove calls sendMcpRemoveServer with server name", () => {
+    // Removing a server should call sendMcpRemoveServer regardless of scope
     mockState.mcpServers = new Map([["test-session", [
       makeServer({ name: "keep-me", scope: "managed", config: { type: "stdio", command: "keep" } }),
       makeServer({ name: "remove-me", scope: "managed", config: { type: "sse", url: "http://remove" } }),
@@ -600,42 +595,38 @@ describe("McpPanel remove button", () => {
     // Click remove on the second managed server ("remove-me")
     fireEvent.click(removeButtons[1]);
 
-    // Should call sendMcpSetServers with ONLY the remaining managed server
-    expect(mockSendMcpSetServers).toHaveBeenCalledTimes(1);
-    expect(mockSendMcpSetServers).toHaveBeenCalledWith("test-session", {
-      "keep-me": { type: "stdio", command: "keep" },
-    });
+    expect(mockSendMcpRemoveServer).toHaveBeenCalledTimes(1);
+    expect(mockSendMcpRemoveServer).toHaveBeenCalledWith("test-session", "remove-me");
   });
 
-  it("remove of project-scoped server sends mcp_delete_file_server", () => {
+  it("remove of project-scoped server calls sendMcpRemoveServer", () => {
     mockState.mcpServers = new Map([["test-session", [
       makeServer({ name: "proj-server", scope: "project", config: { type: "stdio", command: "proj" } }),
     ]]]);
     render(<McpSection sessionId="test-session" />);
     fireEvent.click(screen.getByTitle("Remove server"));
-    expect(mockSendMcpDeleteFileServer).toHaveBeenCalledWith("test-session", "proj-server", "project");
-    expect(mockSendMcpSetServers).not.toHaveBeenCalled();
+    expect(mockSendMcpRemoveServer).toHaveBeenCalledWith("test-session", "proj-server");
   });
 
-  it("remove of user-scoped server sends mcp_delete_file_server", () => {
+  it("remove of user-scoped server calls sendMcpRemoveServer", () => {
     mockState.mcpServers = new Map([["test-session", [
       makeServer({ name: "user-server", scope: "user", config: { type: "stdio", command: "u" } }),
     ]]]);
     render(<McpSection sessionId="test-session" />);
     fireEvent.click(screen.getByTitle("Remove server"));
-    expect(mockSendMcpDeleteFileServer).toHaveBeenCalledWith("test-session", "user-server", "user");
+    expect(mockSendMcpRemoveServer).toHaveBeenCalledWith("test-session", "user-server");
   });
 
-  it("remove of local-scoped server sends mcp_delete_file_server", () => {
+  it("remove of local-scoped server calls sendMcpRemoveServer", () => {
     mockState.mcpServers = new Map([["test-session", [
       makeServer({ name: "local-server", scope: "local", config: { type: "stdio", command: "l" } }),
     ]]]);
     render(<McpSection sessionId="test-session" />);
     fireEvent.click(screen.getByTitle("Remove server"));
-    expect(mockSendMcpDeleteFileServer).toHaveBeenCalledWith("test-session", "local-server", "local");
+    expect(mockSendMcpRemoveServer).toHaveBeenCalledWith("test-session", "local-server");
   });
 
-  it("remove of only managed server sends empty map", () => {
+  it("remove of only managed server calls sendMcpRemoveServer", () => {
     mockState.mcpServers = new Map([["test-session", [
       makeServer({ name: "only-dynamic", scope: "managed" }),
       makeServer({ name: "claudeai-server", scope: "claudeai" }),
@@ -645,8 +636,7 @@ describe("McpPanel remove button", () => {
     const removeButton = screen.getByTitle("Remove server");
     fireEvent.click(removeButton);
 
-    // Should send empty map — clears all dynamic servers, claudeai unaffected
-    expect(mockSendMcpSetServers).toHaveBeenCalledWith("test-session", {});
+    expect(mockSendMcpRemoveServer).toHaveBeenCalledWith("test-session", "only-dynamic");
   });
 });
 
@@ -674,7 +664,7 @@ describe("McpPanel edit button", () => {
     expect(screen.queryByText("Add Server")).toBeNull();
   });
 
-  it("edit submit sends mcp_set_servers with only managed servers", () => {
+  it("edit submit calls sendMcpEditServer", () => {
     mockState.mcpServers = new Map([["test-session", [
       makeServer({
         name: "edit-me",
@@ -696,13 +686,13 @@ describe("McpPanel edit button", () => {
     // Submit
     fireEvent.click(screen.getByText("Save"));
 
-    // Should only include managed servers, with updated config
-    expect(mockSendMcpSetServers).toHaveBeenCalledWith("test-session", {
-      "edit-me": { type: "sse", url: "http://new-url" },
+    expect(mockSendMcpEditServer).toHaveBeenCalledWith("test-session", "edit-me", {
+      type: "sse",
+      url: "http://new-url",
     });
   });
 
-  it("edit submit sends mcp_edit_file_server for project-scoped server", () => {
+  it("edit submit calls sendMcpEditServer for project-scoped server", () => {
     mockState.mcpServers = new Map([["test-session", [
       makeServer({
         name: "proj-server",
@@ -719,13 +709,11 @@ describe("McpPanel edit button", () => {
 
     fireEvent.click(screen.getByText("Save"));
 
-    expect(mockSendMcpEditFileServer).toHaveBeenCalledWith(
+    expect(mockSendMcpEditServer).toHaveBeenCalledWith(
       "test-session",
       "proj-server",
-      "project",
       { type: "sse", url: "http://new-url" },
     );
-    expect(mockSendMcpSetServers).not.toHaveBeenCalled();
   });
 });
 
@@ -752,9 +740,10 @@ describe("McpPanel add form", () => {
     // Submit
     fireEvent.click(screen.getByText("Add Server"));
 
-    // Should send only the new server — CLI merges with existing dynamic set
-    expect(mockSendMcpSetServers).toHaveBeenCalledWith("test-session", {
-      "new-server": { type: "stdio", command: "node new.js" },
+    // Should call sendMcpAddServer with just the new server's name and config
+    expect(mockSendMcpAddServer).toHaveBeenCalledWith("test-session", "new-server", {
+      type: "stdio",
+      command: "node new.js",
     });
   });
 });

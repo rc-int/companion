@@ -1608,17 +1608,12 @@ describe("Browser message routing", () => {
     expect(cli.send).toHaveBeenCalledTimes(1);
   });
 
-  it("mcp_set_servers: deduplicates repeated client_msg_id", () => {
+  it("mcp_add_server: deduplicates repeated client_msg_id", () => {
     const payload = {
-      type: "mcp_set_servers",
-      servers: {
-        "server-a": {
-          type: "stdio",
-          command: "node",
-          args: ["server.js"],
-        },
-      },
-      client_msg_id: "mcp-set-servers-1",
+      type: "mcp_add_server",
+      serverName: "test",
+      config: { type: "stdio", command: "test" },
+      client_msg_id: "mcp-add-server-1",
     };
     bridge.handleBrowserMessage(browser, JSON.stringify(payload));
     bridge.handleBrowserMessage(browser, JSON.stringify(payload));
@@ -3225,26 +3220,20 @@ describe("MCP control messages", () => {
     expect(browser.send).not.toHaveBeenCalled();
   });
 
-  it("mcp_set_servers: sends mcp_set_servers control_request to CLI", () => {
+  it("mcp_add_server: sends mcp_reconnect control_request to CLI", () => {
     vi.useFakeTimers();
-    const servers = {
-      "my-notes": {
-        type: "stdio" as const,
-        command: "npx",
-        args: ["-y", "@modelcontextprotocol/server-memory"],
-      },
-    };
     bridge.handleBrowserMessage(browser, JSON.stringify({
-      type: "mcp_set_servers",
-      servers,
+      type: "mcp_add_server",
+      serverName: "notes-server",
+      config: { type: "stdio", command: "npx" },
     }));
 
     expect(cli.send).toHaveBeenCalledTimes(1);
     const sentRaw = cli.send.mock.calls[0][0] as string;
     const sent = JSON.parse(sentRaw.trim());
     expect(sent.type).toBe("control_request");
-    expect(sent.request.subtype).toBe("mcp_set_servers");
-    expect(sent.request.servers).toEqual(servers);
+    expect(sent.request.subtype).toBe("mcp_reconnect");
+    expect(sent.request.serverName).toBe("notes-server");
     vi.useRealTimers();
   });
 });

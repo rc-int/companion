@@ -115,6 +115,7 @@ export function handleMcpGetStatus(
     subtype: "mcp_status",
     resolve: (response) => {
       const servers = (response as { mcpServers?: McpServerDetail[] }).mcpServers ?? [];
+      session.lastMcpServers = servers;
       broadcastToBrowsers(session, { type: "mcp_status", servers });
     },
   });
@@ -139,56 +140,74 @@ export function handleMcpReconnect(
   setTimeout(refreshStatus, 1000);
 }
 
-export function handleMcpSetServers(
-  sendControlRequestFn: (request: Record<string, unknown>) => void,
-  servers: Record<string, unknown>,
-  refreshStatus: () => void,
-): void {
-  sendControlRequestFn({ subtype: "mcp_set_servers", servers });
-  setTimeout(refreshStatus, 2000);
-}
-
-export function handleMcpDeleteFileServer(
+export function handleMcpAddServer(
   session: Session,
   serverName: string,
-  scope: string,
+  config: Record<string, unknown>,
   sendControlRequestFn: (request: Record<string, unknown>) => void,
   refreshStatus: () => void,
 ): void {
-  if (!isFileScope(scope)) {
-    console.warn(`[${session.id.slice(-8)}] mcp_delete_file_server: invalid scope "${scope}"`);
-    return;
-  }
-  const repoRoot = session.state.repo_root || session.state.cwd;
-  const filePath = settingsPathForScope(scope, repoRoot);
-  console.log(`[${session.id.slice(-8)}] Deleting MCP server "${serverName}" from ${scope} settings: ${filePath}`);
+  // Always write to user-scope settings (~/.claude/settings.json) so the server
+  // is available across all projects — matches `claude mcp add` behavior.
+  const filePath = settingsPathForScope("user", "");
+  console.log(`[${session.id.slice(-8)}] Adding MCP server "${serverName}" to user settings: ${filePath}`);
+  updateServerInSettings(filePath, serverName, config);
+  // Reconnect so the CLI picks up the new config
+  sendControlRequestFn({ subtype: "mcp_reconnect", serverName });
+  setTimeout(refreshStatus, 1000);
+}
 
-  const removed = removeServerFromSettings(filePath, serverName);
-  if (!removed) {
-    console.warn(`[${session.id.slice(-8)}] Server "${serverName}" not found in ${filePath}`);
+export function handleMcpRemoveServer(
+  session: Session,
+  serverName: string,
+  sendControlRequestFn: (request: Record<string, unknown>) => void,
+  refreshStatus: () => void,
+): void {
+  // Look up the server's scope from the cached server list
+  const cached = session.lastMcpServers.find((s) => s.name === serverName);
+  const scope = cached?.scope;
+  const repoRoot = session.state.repo_root || session.state.cwd;
+
+  if (scope && isFileScope(scope)) {
+    const filePath = settingsPathForScope(scope, repoRoot);
+    console.log(`[${session.id.slice(-8)}] Removing MCP server "${serverName}" from ${scope} settings: ${filePath}`);
+    const removed = removeServerFromSettings(filePath, serverName);
+    if (!removed) {
+      console.warn(`[${session.id.slice(-8)}] Server "${serverName}" not found in ${filePath}`);
+    }
+  } else {
+    // Managed or unknown scope — try removing from user settings as fallback
+    const filePath = settingsPathForScope("user", "");
+    console.log(`[${session.id.slice(-8)}] Removing MCP server "${serverName}" from user settings (fallback): ${filePath}`);
+    removeServerFromSettings(filePath, serverName);
   }
   // Disable in the running session immediately
   sendControlRequestFn({ subtype: "mcp_toggle", serverName, enabled: false });
   setTimeout(refreshStatus, 500);
 }
 
-export function handleMcpEditFileServer(
+export function handleMcpEditServer(
   session: Session,
   serverName: string,
-  scope: string,
   config: Record<string, unknown>,
   sendControlRequestFn: (request: Record<string, unknown>) => void,
   refreshStatus: () => void,
 ): void {
-  if (!isFileScope(scope)) {
-    console.warn(`[${session.id.slice(-8)}] mcp_edit_file_server: invalid scope "${scope}"`);
-    return;
-  }
+  // Look up the server's scope from the cached server list
+  const cached = session.lastMcpServers.find((s) => s.name === serverName);
+  const scope = cached?.scope;
   const repoRoot = session.state.repo_root || session.state.cwd;
-  const filePath = settingsPathForScope(scope, repoRoot);
-  console.log(`[${session.id.slice(-8)}] Editing MCP server "${serverName}" in ${scope} settings: ${filePath}`);
 
-  updateServerInSettings(filePath, serverName, config);
+  if (scope && isFileScope(scope)) {
+    const filePath = settingsPathForScope(scope, repoRoot);
+    console.log(`[${session.id.slice(-8)}] Editing MCP server "${serverName}" in ${scope} settings: ${filePath}`);
+    updateServerInSettings(filePath, serverName, config);
+  } else {
+    // Managed or unknown scope — write to user settings
+    const filePath = settingsPathForScope("user", "");
+    console.log(`[${session.id.slice(-8)}] Editing MCP server "${serverName}" in user settings (fallback): ${filePath}`);
+    updateServerInSettings(filePath, serverName, config);
+  }
   // Reconnect so the CLI picks up the new config
   sendControlRequestFn({ subtype: "mcp_reconnect", serverName });
   setTimeout(refreshStatus, 1000);
