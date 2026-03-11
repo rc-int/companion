@@ -99,16 +99,36 @@ wsBridge.onCLIRelaunchNeededCallback(async (sessionId) => {
   if (info?.archived) return;
   if (!info) {
     // Orphaned session: WsBridge restored it from disk but launcher has no record.
-    // This happens after server restarts when the session was from a previous lifecycle.
-    console.log(`[server] Session ${sessionId} not found in launcher, cannot relaunch (orphaned)`);
-    relaunchingSet.add(sessionId); // prevent repeated error broadcasts on reconnect
-    wsBridge.broadcastToSession(sessionId, {
-      type: "error",
-      message: "This session's backend process is gone and cannot be relaunched. Please create a new session.",
-    });
-    return;
+    // This happens after server restarts when launcher.json was lost or migrated.
+    // Reconstruct a launcher entry from WsBridge state and attempt relaunch.
+    const bridgeSession = wsBridge.getSession(sessionId);
+    const state = bridgeSession?.state;
+    if (!state?.cwd) {
+      console.log(`[server] Session ${sessionId} orphaned with no cwd, cannot recover`);
+      relaunchingSet.add(sessionId);
+      wsBridge.broadcastToSession(sessionId, {
+        type: "error",
+        message: "This session's backend process is gone and cannot be relaunched (no working directory). Please create a new session.",
+      });
+      return;
+    }
+
+    console.log(`[server] Recovering orphaned session ${sessionId} from WsBridge state (cwd=${state.cwd})`);
+    const recovered: import("./cli-launcher.js").SdkSessionInfo = {
+      sessionId,
+      state: "exited",
+      cwd: state.cwd,
+      createdAt: Date.now(),
+      model: state.model || undefined,
+      permissionMode: state.permissionMode || undefined,
+      backendType: state.backend_type || "claude",
+      cliSessionId: state.session_id !== sessionId ? state.session_id : undefined,
+    };
+    launcher.registerOrphan(recovered);
+    // Fall through to the relaunch logic below
   }
-  if (info.state !== "starting") {
+  const current = launcher.getSession(sessionId);
+  if (current && current.state !== "starting") {
     relaunchingSet.add(sessionId);
     console.log(`[server] Auto-relaunching CLI for session ${sessionId}`);
     try {

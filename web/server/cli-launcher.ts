@@ -793,7 +793,7 @@ export class CliLauncher {
 
     // Connect to Codex app-server through a Node helper process that uses the
     // `ws` package directly (with perMessageDeflate disabled). This avoids a Bun
-    // runtime compatibility issue where the `ws` client can mis-handle a valid
+    // runtime compatibility issue where the `ws` client can mishandle a valid
     // 101 upgrade response from Codex's Rust WS server.
     const codexBinaryDir = isContainerized ? undefined : resolve(binary, "..");
     const proxyNodeCandidate = codexBinaryDir ? join(codexBinaryDir, "node") : undefined;
@@ -1158,6 +1158,17 @@ export class CliLauncher {
       info.archived = archived;
       this.persistState();
     }
+  }
+
+  /**
+   * Register a session that was restored by WsBridge but not by the launcher
+   * (e.g. after a migration or if launcher.json was lost). This allows the
+   * relaunch flow to recover orphaned sessions instead of giving up.
+   */
+  registerOrphan(info: SdkSessionInfo): void {
+    if (this.sessions.has(info.sessionId)) return;
+    this.sessions.set(info.sessionId, info);
+    this.persistState();
   }
 
   /**
