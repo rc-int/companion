@@ -39,8 +39,14 @@ interface ReflectionGap {
  */
 export async function onSessionExit(sessionId: string, metrics: SessionMetrics): Promise<void> {
   try {
+    const sid = sessionId.slice(-8)
+    console.log(
+      `[skill-observer] Session ${sid}: duration=${metrics.durationMinutes.toFixed(1)}min, prompts=${metrics.promptCount}, tools=${metrics.toolNames.length}, errors=${metrics.errorStrings.length}`
+    )
+
     // Skip trivial sessions
     if (metrics.durationMinutes < MIN_DURATION_MINUTES || metrics.promptCount < MIN_PROMPT_COUNT) {
+      console.log(`[skill-observer] Session ${sid}: skipped (below thresholds)`)
       return
     }
 
