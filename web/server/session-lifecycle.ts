@@ -14,6 +14,7 @@ import type { CliLauncher, SdkSessionInfo, LaunchOptions } from "./cli-launcher.
 import type { WsBridge } from "./ws-bridge.js";
 import type { SessionStore } from "./session-store.js";
 import type { CompanionSettings } from "./settings-manager.js";
+import * as sessionNames from "./session-names.js";
 
 // ─── Handoff prompt ──────────────────────────────────────────────────────────
 
@@ -162,8 +163,9 @@ export class SessionLifecycleManager {
     const sessions = this.launcher.listSessions();
 
     for (const info of sessions) {
-      // Skip archived or currently-archiving sessions
+      // Skip archived, exited, or currently-archiving sessions
       if (info.archived) continue;
+      if (info.state === "exited") continue;
       if (this.archiving.has(info.sessionId)) continue;
 
       // Check max session age first (absolute ceiling, regardless of activity)
@@ -224,10 +226,24 @@ export class SessionLifecycleManager {
   // ── Archive flow ─────────────────────────────────────────────────────
 
   private async archiveSession(info: SdkSessionInfo, reason: string = "idle_timeout"): Promise<void> {
+    // Defensive: re-check archived flag from launcher (not the snapshot) to prevent
+    // double-archive after server restarts where the reconnection watchdog may have
+    // already processed this session.
+    const current = this.launcher.getSession(info.sessionId);
+    if (!current || current.archived) {
+      console.log(`[lifecycle] Skipping archive for ${info.sessionId.slice(-8)}: already archived or removed`);
+      return;
+    }
+
     this.archiving.add(info.sessionId);
 
     try {
-      // Step 1: Handoff (if enabled and CLI is alive)
+      // Step 1: Mark archived FIRST to prevent races with the reconnection
+      // watchdog and other relaunch paths that check the archived flag.
+      this.launcher.setArchived(info.sessionId, true);
+      this.store.setArchived(info.sessionId, true);
+
+      // Step 2: Handoff (if enabled and CLI is alive)
       if (this.config.handoffEnabled && this.launcher.isAlive(info.sessionId)) {
         console.log(`[lifecycle] Injecting handoff prompt for session ${info.sessionId}`);
         this.bridge.injectUserMessage(info.sessionId, HANDOFF_PROMPT);
@@ -236,18 +252,17 @@ export class SessionLifecycleManager {
         await new Promise<void>((resolve) => setTimeout(resolve, getHandoffWaitMs()));
       }
 
-      // Step 2: Kill CLI
+      // Step 3: Kill CLI
       await this.launcher.kill(info.sessionId);
-
-      // Step 3: Mark archived
-      this.launcher.setArchived(info.sessionId, true);
-      this.store.setArchived(info.sessionId, true);
 
       console.log(`[lifecycle] Auto-archived session ${info.sessionId}: reason=${reason}`);
 
-      // Step 4: Respawn (if enabled)
-      if (this.config.autoRespawnEnabled) {
+      // Step 4: Respawn (if enabled and not an agent session — agents are
+      // re-executed by the AgentExecutor on their next scheduled trigger)
+      if (this.config.autoRespawnEnabled && !info.agentId) {
         await this.respawnSession(info);
+      } else if (info.agentId) {
+        console.log(`[lifecycle] Skipping respawn for agent session ${info.sessionId.slice(-8)} (agent: ${info.agentName || info.agentId})`);
       }
     } catch (err) {
       console.error(`[lifecycle] Error archiving session ${info.sessionId}:`, err);
@@ -268,10 +283,21 @@ export class SessionLifecycleManager {
       const newSession = this.launcher.launch({
         cwd,
         backendType,
+        model: archivedInfo.model,
+        permissionMode: archivedInfo.permissionMode,
       });
 
+      // Carry over the session name so the user knows what this respawn is for
+      const oldName = sessionNames.getName(archivedInfo.sessionId);
+      if (oldName) {
+        // Strip any existing recycle prefix to avoid stacking (e.g. "♻ ♻ name")
+        const baseName = oldName.replace(/^♻\s*/, "");
+        sessionNames.setName(newSession.sessionId, `♻ ${baseName}`);
+      }
+
       console.log(
-        `[lifecycle] Respawned session for ${basename(cwd)}: newId=${newSession.sessionId}`,
+        `[lifecycle] Respawned session for ${basename(cwd)}: ` +
+          `oldId=${archivedInfo.sessionId.slice(-8)} → newId=${newSession.sessionId.slice(-8)}`,
       );
     } catch (err) {
       console.error(

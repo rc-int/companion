@@ -367,8 +367,17 @@ if (starting.length > 0) {
   console.log(`[server] Waiting ${RECONNECT_GRACE_MS / 1000}s for ${starting.length} CLI process(es) to reconnect...`);
   setTimeout(async () => {
     const stale = launcher.getStartingSessions();
+    const now = Date.now();
     for (const info of stale) {
       if (info.archived) continue;
+      // Don't relaunch sessions that are past max age — the lifecycle manager
+      // will archive them shortly. Relaunching them with --resume loads stale
+      // conversation history that then leaks into the respawned session.
+      const maxAgeMs = lifecycleConfig.maxSessionAgeMs;
+      if (maxAgeMs > 0 && (now - info.createdAt) >= maxAgeMs) {
+        console.log(`[server] Skipping relaunch for session ${info.sessionId.slice(-8)}: past max age, lifecycle will archive`);
+        continue;
+      }
       console.log(`[server] CLI for session ${info.sessionId} did not reconnect, relaunching...`);
       await launcher.relaunch(info.sessionId);
     }

@@ -27,7 +27,10 @@ function makeMockLauncher(sessions: SdkSessionInfo[] = []) {
   return {
     listSessions: vi.fn(() => sessions),
     getSession: vi.fn((id: string) => sessions.find((s) => s.sessionId === id)),
-    setArchived: vi.fn(),
+    setArchived: vi.fn((id: string, archived: boolean) => {
+      const s = sessions.find((x) => x.sessionId === id);
+      if (s) s.archived = archived;
+    }),
     kill: vi.fn(async () => true),
     isAlive: vi.fn((id: string) => {
       const s = sessions.find((x) => x.sessionId === id);
@@ -383,8 +386,10 @@ describe("SessionLifecycleManager", () => {
       expect(launcher.kill).toHaveBeenCalledWith("ho-1");
     });
 
-    it("skips handoff when CLI is not alive", async () => {
-      const sessions = [makeSessionInfo({ sessionId: "dead-1", state: "exited" })];
+    it("skips handoff when CLI is not alive but still archives", async () => {
+      // Session is in "running" state but the CLI process has crashed (isAlive returns false).
+      // This simulates a scenario where the process died but session state wasn't updated.
+      const sessions = [makeSessionInfo({ sessionId: "dead-1", state: "running" })];
       const stateMap = new Map([
         ["dead-1", makeSessionState({ session_id: "dead-1", num_turns: 5 })],
       ]);
@@ -572,6 +577,114 @@ describe("SessionLifecycleManager", () => {
       // Simulate activity so idle doesn't trigger
       await manager._checkForTest();
       stateMap.get("ancient-1")!.num_turns = 10;
+      await manager._checkForTest();
+
+      expect(launcher.kill).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── Agent session handling ──────────────────────────────────────────
+
+  describe("agent sessions", () => {
+    it("does NOT respawn agent sessions (lets AgentExecutor handle re-execution)", async () => {
+      const sessions = [makeSessionInfo({
+        sessionId: "agent-1",
+        agentId: "s3-monitor",
+        agentName: "S3 Monitor",
+      })];
+      const stateMap = new Map([
+        ["agent-1", makeSessionState({ session_id: "agent-1", num_turns: 5 })],
+      ]);
+
+      const launcher = makeMockLauncher(sessions);
+      const bridge = makeMockBridge(stateMap);
+      const store = makeMockStore();
+
+      const config: LifecycleConfig = {
+        enabled: true,
+        idleTimeoutMs: 0,
+        checkIntervalMs: 60_000,
+        handoffEnabled: false,
+        autoRespawnEnabled: true, // respawn is enabled globally
+        maxSessionAgeMs: 0,
+        activityGuardMs: 0,
+      };
+
+      manager = new SessionLifecycleManager(launcher as any, bridge as any, store as any, config);
+
+      await manager._checkForTest();
+      await manager._checkForTest();
+
+      // Should archive the agent session
+      expect(launcher.kill).toHaveBeenCalledWith("agent-1");
+      expect(launcher.setArchived).toHaveBeenCalledWith("agent-1", true);
+      // But should NOT respawn it
+      expect(launcher.launch).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── Double-archive prevention ─────────────────────────────────────────
+
+  describe("double-archive prevention", () => {
+    it("skips archiving a session that was already archived by another path", async () => {
+      const sessions = [makeSessionInfo({ sessionId: "dbl-1" })];
+      const stateMap = new Map([
+        ["dbl-1", makeSessionState({ session_id: "dbl-1", num_turns: 5 })],
+      ]);
+
+      const launcher = makeMockLauncher(sessions);
+      const bridge = makeMockBridge(stateMap);
+      const store = makeMockStore();
+
+      const config: LifecycleConfig = {
+        enabled: true,
+        idleTimeoutMs: 0,
+        checkIntervalMs: 60_000,
+        handoffEnabled: false,
+        autoRespawnEnabled: false,
+        maxSessionAgeMs: 0,
+        activityGuardMs: 0,
+      };
+
+      manager = new SessionLifecycleManager(launcher as any, bridge as any, store as any, config);
+
+      // First check: snapshot
+      await manager._checkForTest();
+
+      // Simulate another system archiving this session between checks
+      sessions[0].archived = true;
+
+      // Second check: would normally archive due to idle, but should detect
+      // it's already archived via the getSession re-check in archiveSession
+      await manager._checkForTest();
+
+      // kill should NOT be called because the defensive check catches it
+      expect(launcher.kill).not.toHaveBeenCalled();
+    });
+
+    it("skips exited sessions in the check loop", async () => {
+      const sessions = [makeSessionInfo({ sessionId: "exit-1", state: "exited" })];
+      const stateMap = new Map([
+        ["exit-1", makeSessionState({ session_id: "exit-1", num_turns: 5 })],
+      ]);
+
+      const launcher = makeMockLauncher(sessions);
+      const bridge = makeMockBridge(stateMap);
+      const store = makeMockStore();
+
+      const config: LifecycleConfig = {
+        enabled: true,
+        idleTimeoutMs: 0,
+        checkIntervalMs: 60_000,
+        handoffEnabled: false,
+        autoRespawnEnabled: false,
+        maxSessionAgeMs: 0,
+        activityGuardMs: 0,
+      };
+
+      manager = new SessionLifecycleManager(launcher as any, bridge as any, store as any, config);
+
+      await manager._checkForTest();
       await manager._checkForTest();
 
       expect(launcher.kill).not.toHaveBeenCalled();
