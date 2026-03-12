@@ -62,6 +62,7 @@ function createMockSession(overrides = {}): Session {
     lastAckSeq: 0,
     processedClientMessageIds: [],
     processedClientMessageIdSet: new Set(),
+    lastMcpServers: [],
     ...overrides,
   } as Session;
 }

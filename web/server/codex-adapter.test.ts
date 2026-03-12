@@ -2491,7 +2491,7 @@ describe("CodexAdapter", () => {
     expect(mcpStatus!.servers[0].status).toBe("disabled");
   });
 
-  it("handles mcp_set_servers by merging with existing config", async () => {
+  it("handles mcp_add_server by writing config for a single server", async () => {
     const adapter = new CodexAdapter(proc as never, "test-session", { model: "o4-mini" });
 
     await new Promise((r) => setTimeout(r, 50));
@@ -2502,26 +2502,24 @@ describe("CodexAdapter", () => {
 
     stdin.chunks.length = 0;
     adapter.sendBrowserMessage({
-      type: "mcp_set_servers",
-      servers: {
-        memory: {
-          type: "stdio",
-          command: "npx",
-          args: ["-y", "@modelcontextprotocol/server-memory"],
-        },
+      type: "mcp_add_server",
+      serverName: "memory",
+      config: {
+        type: "stdio",
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-memory"],
       },
     });
     await new Promise((r) => setTimeout(r, 20));
 
     const allWritten = stdin.chunks.join("");
-    const writeLine = allWritten.split("\n").find((l) => l.includes('"method":"config/batchWrite"'));
+    const writeLine = allWritten.split("\n").find((l) => l.includes('"method":"config/value/write"'));
     expect(writeLine).toBeDefined();
     const writeReq = JSON.parse(writeLine!);
-    expect(writeReq.params.edits).toHaveLength(1);
-    expect(writeReq.params.edits[0].keyPath).toBe("mcp_servers.memory");
-    expect(writeReq.params.edits[0].mergeStrategy).toBe("upsert");
-    expect(writeReq.params.edits[0].value.command).toBe("npx");
-    expect(writeReq.params.edits[0].value.args).toEqual(["-y", "@modelcontextprotocol/server-memory"]);
+    expect(writeReq.params.keyPath).toBe("mcp_servers.memory");
+    expect(writeReq.params.mergeStrategy).toBe("upsert");
+    expect(writeReq.params.value.command).toBe("npx");
+    expect(writeReq.params.value.args).toEqual(["-y", "@modelcontextprotocol/server-memory"]);
 
     // Complete in-flight requests
     stdout.push(JSON.stringify({ id: 4, result: { status: "updated" } }) + "\n");
@@ -2530,7 +2528,7 @@ describe("CodexAdapter", () => {
     await new Promise((r) => setTimeout(r, 20));
     stdout.push(JSON.stringify({ id: 6, result: { data: [], nextCursor: null } }) + "\n");
     await new Promise((r) => setTimeout(r, 20));
-    stdout.push(JSON.stringify({ id: 7, result: { config: { mcp_servers: { memory: writeReq.params.edits[0].value } } } }) + "\n");
+    stdout.push(JSON.stringify({ id: 7, result: { config: { mcp_servers: { memory: writeReq.params.value } } } }) + "\n");
     await new Promise((r) => setTimeout(r, 30));
   });
 

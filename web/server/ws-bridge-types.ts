@@ -2,6 +2,7 @@ import type { ServerWebSocket } from "bun";
 import type {
   BackendType,
   BrowserIncomingMessage,
+  McpServerDetail,
   PermissionRequest,
   SessionState,
   BufferedBrowserEvent,
@@ -50,6 +51,8 @@ export interface Session {
   lastAckSeq: number;
   processedClientMessageIds: string[];
   processedClientMessageIdSet: Set<string>;
+  /** Cached MCP server list from last mcp_status response (used by remove/edit to resolve scope) */
+  lastMcpServers: McpServerDetail[];
 }
 
 export type GitSessionKey =
