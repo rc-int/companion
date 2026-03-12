@@ -28,6 +28,7 @@ export interface CompanionSettings {
   updateChannel: UpdateChannel;
   sessionLifecycle: "manual" | "auto";
   sessionIdleTimeoutHours: number;
+  sessionMaxAgeHours: number;
   sessionAutoRespawn: boolean;
   sessionHandoffEnabled: boolean;
   updatedAt: number;
@@ -54,6 +55,7 @@ let settings: CompanionSettings = {
   updateChannel: "stable",
   sessionLifecycle: "auto",
   sessionIdleTimeoutHours: 48,
+  sessionMaxAgeHours: 24,
   sessionAutoRespawn: true,
   sessionHandoffEnabled: true,
   updatedAt: 0,
@@ -82,6 +84,9 @@ function normalize(raw: Partial<CompanionSettings> | null | undefined): Companio
     sessionIdleTimeoutHours: typeof raw?.sessionIdleTimeoutHours === "number" && raw.sessionIdleTimeoutHours > 0
       ? raw.sessionIdleTimeoutHours
       : 48,
+    sessionMaxAgeHours: typeof raw?.sessionMaxAgeHours === "number" && raw.sessionMaxAgeHours > 0
+      ? raw.sessionMaxAgeHours
+      : 24,
     sessionAutoRespawn: typeof raw?.sessionAutoRespawn === "boolean" ? raw.sessionAutoRespawn : true,
     sessionHandoffEnabled: typeof raw?.sessionHandoffEnabled === "boolean" ? raw.sessionHandoffEnabled : true,
     updatedAt: typeof raw?.updatedAt === "number" ? raw.updatedAt : 0,
@@ -112,7 +117,7 @@ export function getSettings(): CompanionSettings {
 }
 
 export function updateSettings(
-  patch: Partial<Pick<CompanionSettings, "anthropicApiKey" | "anthropicModel" | "linearApiKey" | "linearAutoTransition" | "linearAutoTransitionStateId" | "linearAutoTransitionStateName" | "linearArchiveTransition" | "linearArchiveTransitionStateId" | "linearArchiveTransitionStateName" | "editorTabEnabled" | "aiValidationEnabled" | "aiValidationAutoApprove" | "aiValidationAutoDeny" | "updateChannel" | "sessionLifecycle" | "sessionIdleTimeoutHours" | "sessionAutoRespawn" | "sessionHandoffEnabled">>,
+  patch: Partial<Pick<CompanionSettings, "anthropicApiKey" | "anthropicModel" | "linearApiKey" | "linearAutoTransition" | "linearAutoTransitionStateId" | "linearAutoTransitionStateName" | "linearArchiveTransition" | "linearArchiveTransitionStateId" | "linearArchiveTransitionStateName" | "editorTabEnabled" | "aiValidationEnabled" | "aiValidationAutoApprove" | "aiValidationAutoDeny" | "updateChannel" | "sessionLifecycle" | "sessionIdleTimeoutHours" | "sessionMaxAgeHours" | "sessionAutoRespawn" | "sessionHandoffEnabled">>,
 ): CompanionSettings {
   ensureLoaded();
   settings = normalize({
@@ -132,6 +137,7 @@ export function updateSettings(
     updateChannel: patch.updateChannel ?? settings.updateChannel,
     sessionLifecycle: patch.sessionLifecycle ?? settings.sessionLifecycle,
     sessionIdleTimeoutHours: patch.sessionIdleTimeoutHours ?? settings.sessionIdleTimeoutHours,
+    sessionMaxAgeHours: patch.sessionMaxAgeHours ?? settings.sessionMaxAgeHours,
     sessionAutoRespawn: patch.sessionAutoRespawn ?? settings.sessionAutoRespawn,
     sessionHandoffEnabled: patch.sessionHandoffEnabled ?? settings.sessionHandoffEnabled,
     updatedAt: Date.now(),

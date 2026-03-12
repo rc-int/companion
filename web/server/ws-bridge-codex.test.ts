@@ -130,6 +130,7 @@ describe("attachCodexAdapterHandlers", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
   });
@@ -889,6 +890,7 @@ describe("attachCodexAdapterHandlers", () => {
         sessionIdleTimeoutHours: 48,
         sessionAutoRespawn: true,
         sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
         updatedAt: 0,
       });
     }
@@ -1060,6 +1062,7 @@ describe("attachCodexAdapterHandlers", () => {
         sessionIdleTimeoutHours: 48,
         sessionAutoRespawn: true,
         sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
         updatedAt: 0,
       });
 
@@ -1101,6 +1104,7 @@ describe("attachCodexAdapterHandlers", () => {
         sessionIdleTimeoutHours: 48,
         sessionAutoRespawn: true,
         sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
         updatedAt: 0,
       });
 
@@ -1207,6 +1211,7 @@ describe("attachCodexAdapterHandlers", () => {
         sessionIdleTimeoutHours: 48,
         sessionAutoRespawn: true,
         sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
         updatedAt: 0,
       });
 
@@ -1332,6 +1337,7 @@ describe("attachCodexAdapterHandlers", () => {
         sessionIdleTimeoutHours: 48,
         sessionAutoRespawn: true,
         sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
         updatedAt: 0,
       });
 

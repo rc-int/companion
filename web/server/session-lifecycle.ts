@@ -33,6 +33,8 @@ export interface LifecycleConfig {
   enabled: boolean;
   /** How long a session must be idle before archiving (default: 48h). */
   idleTimeoutMs: number;
+  /** Maximum session age before forced archive regardless of activity (default: 24h). 0 = disabled. */
+  maxSessionAgeMs: number;
   /** How often to check sessions (default: 60s). */
   checkIntervalMs: number;
   /** Whether to inject a handoff prompt before archiving (default: true). */
@@ -46,6 +48,7 @@ export interface LifecycleConfig {
 const DEFAULT_CONFIG: LifecycleConfig = {
   enabled: false,
   idleTimeoutMs: 48 * 60 * 60 * 1000,
+  maxSessionAgeMs: 24 * 60 * 60 * 1000,
   checkIntervalMs: 60_000,
   handoffEnabled: true,
   autoRespawnEnabled: true,
@@ -109,12 +112,13 @@ export class SessionLifecycleManager {
   static configFromSettings(
     settings: Pick<
       CompanionSettings,
-      "sessionLifecycle" | "sessionIdleTimeoutHours" | "sessionAutoRespawn" | "sessionHandoffEnabled"
+      "sessionLifecycle" | "sessionIdleTimeoutHours" | "sessionMaxAgeHours" | "sessionAutoRespawn" | "sessionHandoffEnabled"
     >,
   ): LifecycleConfig {
     return {
       enabled: settings.sessionLifecycle === "auto",
       idleTimeoutMs: (settings.sessionIdleTimeoutHours ?? 48) * 60 * 60 * 1000,
+      maxSessionAgeMs: (settings.sessionMaxAgeHours ?? 24) * 60 * 60 * 1000,
       checkIntervalMs: DEFAULT_CONFIG.checkIntervalMs,
       handoffEnabled: settings.sessionHandoffEnabled ?? true,
       autoRespawnEnabled: settings.sessionAutoRespawn ?? true,
@@ -131,6 +135,7 @@ export class SessionLifecycleManager {
     }
     console.log(
       `[lifecycle] Started: idleTimeout=${this.config.idleTimeoutMs}ms, ` +
+        `maxAge=${this.config.maxSessionAgeMs}ms, ` +
         `checkInterval=${this.config.checkIntervalMs}ms, ` +
         `handoff=${this.config.handoffEnabled}, respawn=${this.config.autoRespawnEnabled}`,
     );
@@ -160,6 +165,17 @@ export class SessionLifecycleManager {
       // Skip archived or currently-archiving sessions
       if (info.archived) continue;
       if (this.archiving.has(info.sessionId)) continue;
+
+      // Check max session age first (absolute ceiling, regardless of activity)
+      if (this.config.maxSessionAgeMs > 0) {
+        const sessionAge = now - info.createdAt;
+        if (sessionAge >= this.config.maxSessionAgeMs) {
+          const ageHours = (sessionAge / (60 * 60 * 1000)).toFixed(1);
+          console.log(`[lifecycle] Session ${info.sessionId.slice(-8)}: max age reached (${ageHours}h), archiving`);
+          await this.archiveSession(info, "max_age");
+          continue;
+        }
+      }
 
       // Read current state from bridge
       const bridgeSession = this.bridge.getSession(info.sessionId);
@@ -201,13 +217,13 @@ export class SessionLifecycleManager {
       }
 
       // Archive this session
-      await this.archiveSession(info);
+      await this.archiveSession(info, "idle_timeout");
     }
   }
 
   // ── Archive flow ─────────────────────────────────────────────────────
 
-  private async archiveSession(info: SdkSessionInfo): Promise<void> {
+  private async archiveSession(info: SdkSessionInfo, reason: string = "idle_timeout"): Promise<void> {
     this.archiving.add(info.sessionId);
 
     try {
@@ -227,7 +243,7 @@ export class SessionLifecycleManager {
       this.launcher.setArchived(info.sessionId, true);
       this.store.setArchived(info.sessionId, true);
 
-      console.log(`[lifecycle] Auto-archived session ${info.sessionId}: reason=idle_timeout`);
+      console.log(`[lifecycle] Auto-archived session ${info.sessionId}: reason=${reason}`);
 
       // Step 4: Respawn (if enabled)
       if (this.config.autoRespawnEnabled) {

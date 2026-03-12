@@ -87,6 +87,7 @@ vi.mock("./settings-manager.js", () => ({
     sessionIdleTimeoutHours: 48,
     sessionAutoRespawn: true,
     sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
     updatedAt: 0,
   })),
   updateSettings: vi.fn((patch) => ({
@@ -1539,6 +1540,7 @@ describe("POST /api/sessions/:id/archive — Linear transition", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
     const res = await app.request("/api/sessions/s1/archive", {
@@ -1579,6 +1581,7 @@ describe("POST /api/sessions/:id/archive — Linear transition", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
     const res = await app.request("/api/sessions/s1/archive", {
@@ -1612,6 +1615,7 @@ describe("POST /api/sessions/:id/archive — Linear transition", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
     const res = await app.request("/api/sessions/s1/archive", {
@@ -1693,6 +1697,7 @@ describe("GET /api/sessions/:id/archive-info", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
     const res = await app.request("/api/sessions/s1/archive-info", { method: "GET" });
@@ -2063,6 +2068,7 @@ describe("GET /api/settings", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 123,
     });
 
@@ -2106,6 +2112,7 @@ describe("GET /api/settings", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 123,
     });
 
@@ -2151,6 +2158,7 @@ describe("PUT /api/settings", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 456,
     });
 
@@ -2214,6 +2222,7 @@ describe("PUT /api/settings", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 789,
     });
 
@@ -2255,6 +2264,7 @@ describe("PUT /api/settings", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 999,
     });
 
@@ -2464,6 +2474,7 @@ describe("GET /api/linear/issues", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
 
@@ -2493,6 +2504,7 @@ describe("GET /api/linear/issues", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
 
@@ -2576,6 +2588,7 @@ describe("GET /api/linear/issues", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
 
@@ -2666,6 +2679,7 @@ describe("GET /api/linear/issues", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
 
@@ -2721,6 +2735,7 @@ describe("GET /api/linear/connection", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
 
@@ -2750,6 +2765,7 @@ describe("GET /api/linear/connection", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
 
@@ -2802,6 +2818,7 @@ describe("POST /api/linear/issues/:id/transition", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
 
@@ -2836,6 +2853,7 @@ describe("POST /api/linear/issues/:id/transition", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
 
@@ -2869,6 +2887,7 @@ describe("POST /api/linear/issues/:id/transition", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
 
@@ -2903,6 +2922,7 @@ describe("POST /api/linear/issues/:id/transition", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
 
@@ -2972,6 +2992,7 @@ describe("POST /api/linear/issues/:id/transition", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
 
@@ -3020,6 +3041,7 @@ describe("GET /api/linear/projects", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
 
@@ -3049,6 +3071,7 @@ describe("GET /api/linear/projects", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
 
@@ -3109,6 +3132,7 @@ describe("GET /api/linear/project-issues", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
 
@@ -3138,6 +3162,7 @@ describe("GET /api/linear/project-issues", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
 
@@ -3213,6 +3238,7 @@ describe("GET /api/linear/project-issues", () => {
       sessionIdleTimeoutHours: 48,
       sessionAutoRespawn: true,
       sessionHandoffEnabled: true,
+      sessionMaxAgeHours: 24,
       updatedAt: 0,
     });
 

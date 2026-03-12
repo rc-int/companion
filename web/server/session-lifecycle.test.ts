@@ -127,6 +127,7 @@ describe("SessionLifecycleManager", () => {
         checkIntervalMs: 60_000,
         handoffEnabled: false,
         autoRespawnEnabled: false,
+        maxSessionAgeMs: 0,
         activityGuardMs: 0, // disable guard for this test
       };
 
@@ -159,6 +160,7 @@ describe("SessionLifecycleManager", () => {
         checkIntervalMs: 60_000,
         handoffEnabled: false,
         autoRespawnEnabled: false,
+        maxSessionAgeMs: 0,
         activityGuardMs: 0,
       };
 
@@ -201,6 +203,7 @@ describe("SessionLifecycleManager", () => {
         checkIntervalMs: 60_000,
         handoffEnabled: false,
         autoRespawnEnabled: false,
+        maxSessionAgeMs: 0,
         activityGuardMs: 0,
       };
 
@@ -228,6 +231,7 @@ describe("SessionLifecycleManager", () => {
         checkIntervalMs: 60_000,
         handoffEnabled: false,
         autoRespawnEnabled: false,
+        maxSessionAgeMs: 0,
         activityGuardMs: 0,
       };
 
@@ -259,6 +263,7 @@ describe("SessionLifecycleManager", () => {
         checkIntervalMs: 60_000,
         handoffEnabled: false,
         autoRespawnEnabled: false,
+        maxSessionAgeMs: 0,
         activityGuardMs: 0,
       };
 
@@ -297,6 +302,7 @@ describe("SessionLifecycleManager", () => {
         checkIntervalMs: 60_000,
         handoffEnabled: false,
         autoRespawnEnabled: true,
+        maxSessionAgeMs: 0,
         activityGuardMs: 0,
       };
 
@@ -329,6 +335,7 @@ describe("SessionLifecycleManager", () => {
         checkIntervalMs: 60_000,
         handoffEnabled: false,
         autoRespawnEnabled: false,
+        maxSessionAgeMs: 0,
         activityGuardMs: 0,
       };
 
@@ -360,6 +367,7 @@ describe("SessionLifecycleManager", () => {
         checkIntervalMs: 60_000,
         handoffEnabled: true,
         autoRespawnEnabled: false,
+        maxSessionAgeMs: 0,
         activityGuardMs: 0,
       };
 
@@ -392,6 +400,7 @@ describe("SessionLifecycleManager", () => {
         checkIntervalMs: 60_000,
         handoffEnabled: true,
         autoRespawnEnabled: false,
+        maxSessionAgeMs: 0,
         activityGuardMs: 0,
       };
 
@@ -421,6 +430,7 @@ describe("SessionLifecycleManager", () => {
         checkIntervalMs: 60_000,
         handoffEnabled: false,
         autoRespawnEnabled: false,
+        maxSessionAgeMs: 0,
         activityGuardMs: 0,
       };
 
@@ -446,6 +456,7 @@ describe("SessionLifecycleManager", () => {
         checkIntervalMs: 60_000,
         handoffEnabled: false,
         autoRespawnEnabled: false,
+        maxSessionAgeMs: 0,
         activityGuardMs: 0,
       };
 
@@ -458,6 +469,115 @@ describe("SessionLifecycleManager", () => {
     });
   });
 
+  // ── Max session age ─────────────────────────────────────────────────
+
+  describe("max session age", () => {
+    it("archives a session that exceeds max age even if still active", async () => {
+      // Session created 25h ago (exceeds 24h max age)
+      const sessions = [makeSessionInfo({
+        sessionId: "old-1",
+        createdAt: Date.now() - 25 * 60 * 60 * 1000,
+      })];
+      const stateMap = new Map([
+        ["old-1", makeSessionState({ session_id: "old-1", num_turns: 5 })],
+      ]);
+
+      const launcher = makeMockLauncher(sessions);
+      const bridge = makeMockBridge(stateMap);
+      const store = makeMockStore();
+
+      const config: LifecycleConfig = {
+        enabled: true,
+        idleTimeoutMs: 48 * 60 * 60 * 1000,
+        maxSessionAgeMs: 24 * 60 * 60 * 1000, // 24h
+        checkIntervalMs: 60_000,
+        handoffEnabled: false,
+        autoRespawnEnabled: false,
+        activityGuardMs: 0,
+      };
+
+      manager = new SessionLifecycleManager(launcher as any, bridge as any, store as any, config);
+
+      // First check: records snapshot
+      await manager._checkForTest();
+
+      // Simulate activity (num_turns changed) — session is NOT idle
+      stateMap.get("old-1")!.num_turns = 10;
+
+      // Second check: should still archive because max age exceeded
+      await manager._checkForTest();
+
+      expect(launcher.kill).toHaveBeenCalledWith("old-1");
+      expect(launcher.setArchived).toHaveBeenCalledWith("old-1", true);
+    });
+
+    it("does NOT archive a young session even if idle", async () => {
+      // Session created 2h ago (under 24h max age)
+      const sessions = [makeSessionInfo({
+        sessionId: "young-1",
+        createdAt: Date.now() - 2 * 60 * 60 * 1000,
+      })];
+      const stateMap = new Map([
+        ["young-1", makeSessionState({ session_id: "young-1", num_turns: 5 })],
+      ]);
+
+      const launcher = makeMockLauncher(sessions);
+      const bridge = makeMockBridge(stateMap);
+      const store = makeMockStore();
+
+      const config: LifecycleConfig = {
+        enabled: true,
+        idleTimeoutMs: 48 * 60 * 60 * 1000, // 48h idle (won't trigger)
+        maxSessionAgeMs: 24 * 60 * 60 * 1000, // 24h max age (won't trigger for 2h old session)
+        checkIntervalMs: 60_000,
+        handoffEnabled: false,
+        autoRespawnEnabled: false,
+        activityGuardMs: 0,
+      };
+
+      manager = new SessionLifecycleManager(launcher as any, bridge as any, store as any, config);
+
+      await manager._checkForTest();
+      await manager._checkForTest();
+
+      expect(launcher.kill).not.toHaveBeenCalled();
+    });
+
+    it("skips max age check when maxSessionAgeMs is 0", async () => {
+      // Session created 100h ago but max age disabled
+      const sessions = [makeSessionInfo({
+        sessionId: "ancient-1",
+        createdAt: Date.now() - 100 * 60 * 60 * 1000,
+      })];
+      const stateMap = new Map([
+        ["ancient-1", makeSessionState({ session_id: "ancient-1", num_turns: 5 })],
+      ]);
+
+      const launcher = makeMockLauncher(sessions);
+      const bridge = makeMockBridge(stateMap);
+      const store = makeMockStore();
+
+      const config: LifecycleConfig = {
+        enabled: true,
+        idleTimeoutMs: 200 * 60 * 60 * 1000, // very long idle (won't trigger)
+        maxSessionAgeMs: 0, // disabled
+        checkIntervalMs: 60_000,
+        handoffEnabled: false,
+        autoRespawnEnabled: false,
+        activityGuardMs: 0,
+      };
+
+      manager = new SessionLifecycleManager(launcher as any, bridge as any, store as any, config);
+
+      // Simulate activity so idle doesn't trigger
+      await manager._checkForTest();
+      stateMap.get("ancient-1")!.num_turns = 10;
+      await manager._checkForTest();
+
+      expect(launcher.kill).not.toHaveBeenCalled();
+    });
+  });
+
   // ── Config from settings ──────────────────────────────────────────────
 
   describe("configFromSettings", () => {
@@ -465,12 +585,14 @@ describe("SessionLifecycleManager", () => {
       const config = SessionLifecycleManager.configFromSettings({
         sessionLifecycle: "auto",
         sessionIdleTimeoutHours: 48,
+        sessionMaxAgeHours: 24,
         sessionAutoRespawn: true,
         sessionHandoffEnabled: true,
       } as any);
 
       expect(config.enabled).toBe(true);
       expect(config.idleTimeoutMs).toBe(48 * 60 * 60 * 1000);
+      expect(config.maxSessionAgeMs).toBe(24 * 60 * 60 * 1000);
       expect(config.autoRespawnEnabled).toBe(true);
       expect(config.handoffEnabled).toBe(true);
     });
@@ -479,6 +601,7 @@ describe("SessionLifecycleManager", () => {
       const config = SessionLifecycleManager.configFromSettings({
         sessionLifecycle: "manual",
         sessionIdleTimeoutHours: 48,
+        sessionMaxAgeHours: 24,
         sessionAutoRespawn: true,
         sessionHandoffEnabled: true,
       } as any);
