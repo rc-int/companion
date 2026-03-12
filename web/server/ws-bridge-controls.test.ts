@@ -119,24 +119,25 @@ describe("handleMcpAddServer", () => {
     );
   });
 
-  it("sends mcp_reconnect control request so CLI picks up new config", () => {
-    // Validates that after writing the settings file, a reconnect request is sent
-    // to the CLI so it loads the new server without restarting.
+  it("sends mcp_set_servers control request to register server in running CLI", () => {
+    // mcp_reconnect fails for new servers ("Server not found"), so we use
+    // mcp_set_servers to push the config into the running CLI process.
     const session = makeSession();
     const sendControlRequestFn = vi.fn();
     const refreshStatus = vi.fn();
+    const config = { command: "test" };
 
-    handleMcpAddServer(session, "my-server", { command: "test" }, sendControlRequestFn, refreshStatus);
+    handleMcpAddServer(session, "my-server", config, sendControlRequestFn, refreshStatus);
 
     expect(sendControlRequestFn).toHaveBeenCalledWith({
-      subtype: "mcp_reconnect",
-      serverName: "my-server",
+      subtype: "mcp_set_servers",
+      servers: { "my-server": config },
     });
   });
 
-  it("calls refreshStatus after 1000ms timeout", () => {
+  it("calls refreshStatus after 2000ms timeout", () => {
     // Validates that the MCP status is refreshed after a delay to allow
-    // the CLI time to process the reconnect before we query status.
+    // the CLI time to process the new server before we query status.
     const session = makeSession();
     const sendControlRequestFn = vi.fn();
     const refreshStatus = vi.fn();
@@ -144,7 +145,7 @@ describe("handleMcpAddServer", () => {
     handleMcpAddServer(session, "my-server", { command: "test" }, sendControlRequestFn, refreshStatus);
 
     expect(refreshStatus).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(1000);
+    vi.advanceTimersByTime(2000);
     expect(refreshStatus).toHaveBeenCalledOnce();
   });
 });
@@ -409,26 +410,26 @@ describe("handleMcpEditServer", () => {
     );
   });
 
-  it("sends mcp_reconnect control request to reload config", () => {
-    // Validates that after updating settings, a reconnect is sent so
-    // the CLI reloads the server with the new configuration.
+  it("sends mcp_set_servers control request to push updated config to CLI", () => {
+    // Uses mcp_set_servers to update the running CLI process with new config.
     const session = makeSession({
       lastMcpServers: [makeMcpServer("my-server", "user")],
     });
     const sendControlRequestFn = vi.fn();
     const refreshStatus = vi.fn();
+    const config = { command: "test" };
 
-    handleMcpEditServer(session, "my-server", { command: "test" }, sendControlRequestFn, refreshStatus);
+    handleMcpEditServer(session, "my-server", config, sendControlRequestFn, refreshStatus);
 
     expect(sendControlRequestFn).toHaveBeenCalledWith({
-      subtype: "mcp_reconnect",
-      serverName: "my-server",
+      subtype: "mcp_set_servers",
+      servers: { "my-server": config },
     });
   });
 
-  it("calls refreshStatus after 1000ms timeout", () => {
-    // Validates the 1000ms delay before refresh, giving the CLI time
-    // to reconnect the server with updated config.
+  it("calls refreshStatus after 2000ms timeout", () => {
+    // Validates the 2000ms delay before refresh, giving the CLI time
+    // to process the updated server config.
     const session = makeSession({
       lastMcpServers: [makeMcpServer("my-server", "user")],
     });
@@ -438,7 +439,7 @@ describe("handleMcpEditServer", () => {
     handleMcpEditServer(session, "my-server", { command: "test" }, sendControlRequestFn, refreshStatus);
 
     expect(refreshStatus).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(999);
+    vi.advanceTimersByTime(1999);
     expect(refreshStatus).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(refreshStatus).toHaveBeenCalledOnce();

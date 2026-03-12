@@ -147,14 +147,15 @@ export function handleMcpAddServer(
   sendControlRequestFn: (request: Record<string, unknown>) => void,
   refreshStatus: () => void,
 ): void {
-  // Always write to user-scope settings (~/.claude/settings.json) so the server
-  // is available across all projects — matches `claude mcp add` behavior.
+  // Write to user-scope settings (~/.claude/settings.json) for persistence across restarts.
   const filePath = settingsPathForScope("user", "");
   console.log(`[${session.id.slice(-8)}] Adding MCP server "${serverName}" to user settings: ${filePath}`);
   updateServerInSettings(filePath, serverName, config);
-  // Reconnect so the CLI picks up the new config
-  sendControlRequestFn({ subtype: "mcp_reconnect", serverName });
-  setTimeout(refreshStatus, 1000);
+  // Use mcp_set_servers to register the server in the running CLI process.
+  // mcp_reconnect only works for servers the CLI already knows about, so it fails
+  // for newly added servers ("Server not found").
+  sendControlRequestFn({ subtype: "mcp_set_servers", servers: { [serverName]: config } });
+  setTimeout(refreshStatus, 2000);
 }
 
 export function handleMcpRemoveServer(
@@ -208,7 +209,7 @@ export function handleMcpEditServer(
     console.log(`[${session.id.slice(-8)}] Editing MCP server "${serverName}" in user settings (fallback): ${filePath}`);
     updateServerInSettings(filePath, serverName, config);
   }
-  // Reconnect so the CLI picks up the new config
-  sendControlRequestFn({ subtype: "mcp_reconnect", serverName });
-  setTimeout(refreshStatus, 1000);
+  // Use mcp_set_servers to push updated config to the running CLI process
+  sendControlRequestFn({ subtype: "mcp_set_servers", servers: { [serverName]: config } });
+  setTimeout(refreshStatus, 2000);
 }
