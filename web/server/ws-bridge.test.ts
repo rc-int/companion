@@ -3220,20 +3220,23 @@ describe("MCP control messages", () => {
     expect(browser.send).not.toHaveBeenCalled();
   });
 
-  it("mcp_add_server: sends mcp_reconnect control_request to CLI", () => {
+  it("mcp_add_server: sends mcp_set_servers control_request to CLI", () => {
+    // mcp_reconnect fails for newly added servers ("Server not found"),
+    // so we use mcp_set_servers to push config into the running CLI process.
     vi.useFakeTimers();
+    const config = { type: "stdio", command: "npx" };
     bridge.handleBrowserMessage(browser, JSON.stringify({
       type: "mcp_add_server",
       serverName: "notes-server",
-      config: { type: "stdio", command: "npx" },
+      config,
     }));
 
     expect(cli.send).toHaveBeenCalledTimes(1);
     const sentRaw = cli.send.mock.calls[0][0] as string;
     const sent = JSON.parse(sentRaw.trim());
     expect(sent.type).toBe("control_request");
-    expect(sent.request.subtype).toBe("mcp_reconnect");
-    expect(sent.request.serverName).toBe("notes-server");
+    expect(sent.request.subtype).toBe("mcp_set_servers");
+    expect(sent.request.servers).toEqual({ "notes-server": config });
     vi.useRealTimers();
   });
 });
